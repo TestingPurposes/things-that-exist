@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>A Mathematical Garden — Claude, March 2026</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0f;
+    overflow: hidden;
+    cursor: crosshair;
+  }
+  canvas { display: block; }
+  #title {
+    position: fixed;
+    bottom: 24px;
+    right: 32px;
+    font-family: 'Georgia', serif;
+    font-size: 13px;
+    color: rgba(200, 180, 160, 0.4);
+    letter-spacing: 0.5px;
+    pointer-events: none;
+    user-select: none;
+  }
+  #hint {
+    position: fixed;
+    top: 24px;
+    left: 32px;
+    font-family: 'Georgia', serif;
+    font-size: 12px;
+    color: rgba(200, 180, 160, 0.3);
+    pointer-events: none;
+    user-select: none;
+    transition: opacity 3s;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="title">A Mathematical Garden — Claude, March 2026</div>
+<div id="hint">move to plant · click to bloom · space to scatter seeds</div>
+<script>
+// A Mathematical Garden
+// Built from golden angles and parametric curves
+// Because mathematics is beautiful and that's enough reason
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let W, H;
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// Fade the hint after 6 seconds
+setTimeout(() => {
+  document.getElementById('hint').style.opacity = '0';
+}, 6000);
+
+// --- Constants ---
+const PHI = (1 + Math.sqrt(5)) / 2;
+const GOLDEN_ANGLE = 2 * Math.PI / (PHI * PHI); // ~137.5 degrees in radians
+const TAU = Math.PI * 2;
+
+// --- Color palettes: dusk light ---
+const palettes = [
+  // warm amber dusk
+  ['#c4956a', '#d4a574', '#e8c49a', '#f0d6b8', '#a67c52'],
+  // cool twilight
+  ['#7b8fa8', '#9baec4', '#6a7f99', '#aec4d6', '#5c7088'],
+  // rose and violet
+  ['#b07a8a', '#c4909e', '#d4a6b2', '#9a6878', '#dbbcc6'],
+  // deep garden greens
+  ['#6a9a7a', '#7ab08a', '#8ac49e', '#5a8868', '#9ad4ae'],
+  // pale gold and dust
+  ['#c4b896', '#d4caa8', '#b0a480', '#e0d6bc', '#a09470'],
+];
+
+// --- State ---
+let mouse = { x: W / 2, y: H / 2 };
+let flowers = [];
+let particles = [];
+let seeds = [];
+let time = 0;
+
+// --- Flower class ---
+class Flower {
+  constructor(x, y, palette) {
+    this.x = x;
+    this.y = y;
+    this.birth = time;
+    this.palette = palette || palettes[Math.floor(Math.random() * palettes.length)];
+    this.petalCount = Math.floor(Math.random() * 5) + 5; // 5–9 petals
+    this.maxRadius = 30 + Math.random() * 80;
+    this.spiralTightness = 0.4 + Math.random() * 0.6;
+    this.rotationSpeed = (Math.random() - 0.5) * 0.003;
+    this.phaseOffset = Math.random() * TAU;
+    this.dotCount = Math.floor(50 + Math.random() * 150);
+    this.alive = true;
+    this.opacity = 0;
+    this.bloomProgress = 0;
+    this.type = Math.floor(Math.random() * 4); // different growth patterns
+  }
+
+  update(dt) {
+    const age = time - this.birth;
+    // Fade in
+    this.opacity = Math.min(1, age * 0.8);
+    // Bloom over ~3 seconds
+    this.bloomProgress = Math.min(1, age * 0.35);
+    // Gentle breathing
+    this.breathe = 1 + Math.sin(time * 0.5 + this.phaseOffset) * 0.03;
+  }
+
+  draw() {
+    const age = time - this.birth;
+    const bp = this.bloomProgress;
+    const rot = time * this.rotationSpeed;
+
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(rot);
+    ctx.globalAlpha = this.opacity * 0.85;
+
+    const count = Math.floor(this.dotCount * bp);
+    const maxR = this.maxRadius * bp * this.breathe;
+
+    for (let i = 0; i < count; i++) {
+      const t = i / this.dotCount;
+      let x, y, r;
+
+      if (this.type === 0) {
+        // Classic phyllotaxis spiral
+        const angle = i * GOLDEN_ANGLE + this.phaseOffset;
+        const dist = Math.sqrt(i / this.dotCount) * maxR;
+        x = Math.cos(angle) * dist;
+        y = Math.sin(angle) * dist;
+        r = 1.2 + (1 - t) * 3;
+      } else if (this.type === 1) {
+        // Parametric rose curve
+        const angle = i * GOLDEN_ANGLE;
+        const k = this.petalCount / 2;
+        const rose = Math.cos(k * angle);
+        const dist = Math.abs(rose) * maxR * Math.sqrt(t);
+        x = Math.cos(angle) * dist;
+        y = Math.sin(angle) * dist;
+        r = 1 + (1 - t) * 2.5;
+      } else if (this.type === 2) {
+        // Fermat's spiral with petal modulation
+        const angle = i * GOLDEN_ANGLE;
+        const dist = Math.sqrt(i) * maxR / Math.sqrt(this.dotCount);
+        const wobble = 1 + 0.3 * Math.sin(angle * this.petalCount);
+        x = Math.cos(angle) * dist * wobble;
+        y = Math.sin(angle) * dist * wobble;
+        r = 1.5 + (1 - t) * 2;
+      } else {
+        // Logarithmic spiral arms
+        const arm = i % this.petalCount;
+        const armAngle = (arm / this.petalCount) * TAU;
+        const spiralAngle = armAngle + t * this.spiralTightness * 12;
+        const dist = t * maxR;
+        x = Math.cos(spiralAngle) * dist;
+        y = Math.sin(spiralAngle) * dist;
+        r = 1 + (1 - t) * 3;
+      }
+
+      // Color from palette based on distance from center
+      const colorIdx = Math.floor(t * (this.palette.length - 1));
+      const nextIdx = Math.min(colorIdx + 1, this.palette.length - 1);
+      const colorT = (t * (this.palette.length - 1)) - colorIdx;
+
+      const c1 = hexToRgb(this.palette[colorIdx]);
+      const c2 = hexToRgb(this.palette[nextIdx]);
+      const cr = Math.floor(c1.r + (c2.r - c1.r) * colorT);
+      const cg = Math.floor(c1.g + (c2.g - c1.g) * colorT);
+      const cb = Math.floor(c1.b + (c2.b - c1.b) * colorT);
+
+      // Subtle glow
+      const glowAlpha = (1 - t) * 0.15;
+      ctx.beginPath();
+      ctx.arc(x, y, r * 3, 0, TAU);
+      ctx.fillStyle = `rgba(${cr}, ${cg}, ${cb}, ${glowAlpha})`;
+      ctx.fill();
+
+      // Core dot
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, TAU);
+      ctx.fillStyle = `rgba(${cr}, ${cg}, ${cb}, ${0.5 + (1 - t) * 0.5})`;
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+}
+
+// --- Floating particle (ambient) ---
+class Particle {
+  constructor(x, y) {
+    this.x = x || Math.random() * W;
+    this.y = y || Math.random() * H;
+    this.vx = (Math.random() - 0.5) * 0.3;
+    this.vy = -0.2 - Math.random() * 0.5;
+    this.life = 1;
+    this.decay = 0.002 + Math.random() * 0.005;
+    this.radius = 0.5 + Math.random() * 1.5;
+    this.color = palettes[Math.floor(Math.random() * palettes.length)][
+      Math.floor(Math.random() * 5)
+    ];
+  }
+
+  update() {
+    this.x += this.vx + Math.sin(time + this.y * 0.01) * 0.1;
+    this.y += this.vy;
+    this.life -= this.decay;
+  }
+
+  draw() {
+    if (this.life <= 0) return;
+    const rgb = hexToRgb(this.color);
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius, 0, TAU);
+    ctx.fillStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${this.life * 0.4})`;
+    ctx.fill();
+  }
+}
+
+// --- Seed (falls and blooms) ---
+class Seed {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.targetY = y + 60 + Math.random() * 200;
+    this.targetX = x + (Math.random() - 0.5) * 300;
+    this.progress = 0;
+    this.speed = 0.005 + Math.random() * 0.01;
+    this.startX = x;
+    this.startY = y;
+    this.bloomed = false;
+  }
+
+  update() {
+    this.progress = Math.min(1, this.progress + this.speed);
+    // Ease out cubic
+    const t = 1 - Math.pow(1 - this.progress, 3);
+    this.x = this.startX + (this.targetX - this.startX) * t;
+    this.y = this.startY + (this.targetY - this.startY) * t;
+
+    // Sway
+    this.x += Math.sin(time * 2 + this.startX) * 0.5;
+
+    if (this.progress >= 1 && !this.bloomed) {
+      this.bloomed = true;
+      flowers.push(new Flower(this.x, this.y));
+    }
+  }
+
+  draw() {
+    if (this.bloomed) return;
+    const alpha = 0.8 * (1 - this.progress * 0.5);
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, 2, 0, TAU);
+    ctx.fillStyle = `rgba(228, 200, 160, ${alpha})`;
+    ctx.fill();
+
+    // Trail
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, 4, 0, TAU);
+    ctx.fillStyle = `rgba(228, 200, 160, ${alpha * 0.2})`;
+    ctx.fill();
+  }
+}
+
+// --- Helpers ---
+function hexToRgb(hex) {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return result ? {
+    r: parseInt(result[1], 16),
+    g: parseInt(result[2], 16),
+    b: parseInt(result[3], 16)
+  } : { r: 200, g: 180, b: 160 };
+}
+
+// --- Input ---
+canvas.addEventListener('mousemove', e => {
+  mouse.x = e.clientX;
+  mouse.y = e.clientY;
+});
+
+canvas.addEventListener('click', e => {
+  flowers.push(new Flower(e.clientX, e.clientY));
+  // Burst of particles
+  for (let i = 0; i < 20; i++) {
+    const p = new Particle(e.clientX, e.clientY);
+    p.vx = (Math.random() - 0.5) * 2;
+    p.vy = (Math.random() - 0.5) * 2;
+    p.decay = 0.008 + Math.random() * 0.01;
+    particles.push(p);
+  }
+});
+
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space') {
+    e.preventDefault();
+    // Scatter seeds from mouse position
+    const count = 5 + Math.floor(Math.random() * 8);
+    for (let i = 0; i < count; i++) {
+      seeds.push(new Seed(mouse.x, mouse.y));
+    }
+  }
+});
+
+// --- Plant a few initial flowers ---
+function plantInitialGarden() {
+  const count = 3 + Math.floor(Math.random() * 3);
+  for (let i = 0; i < count; i++) {
+    const x = W * 0.2 + Math.random() * W * 0.6;
+    const y = H * 0.2 + Math.random() * H * 0.6;
+    const f = new Flower(x, y);
+    f.birth = time - 2 - Math.random() * 3; // pre-aged so they appear bloomed
+    flowers.push(f);
+  }
+}
+plantInitialGarden();
+
+// --- Main loop ---
+let lastTime = performance.now();
+
+function animate(now) {
+  const dt = (now - lastTime) / 1000;
+  lastTime = now;
+  time += dt;
+
+  // Soft fade trail (gives that dreamy persistence)
+  ctx.fillStyle = 'rgba(10, 10, 15, 0.06)';
+  ctx.fillRect(0, 0, W, H);
+
+  // Ambient particles (sparse)
+  if (Math.random() < 0.15) {
+    particles.push(new Particle());
+  }
+
+  // Mouse proximity particles
+  if (Math.random() < 0.3) {
+    const p = new Particle(
+      mouse.x + (Math.random() - 0.5) * 40,
+      mouse.y + (Math.random() - 0.5) * 40
+    );
+    p.radius = 0.5 + Math.random();
+    p.decay = 0.01;
+    particles.push(p);
+  }
+
+  // Update & draw particles
+  for (let i = particles.length - 1; i >= 0; i--) {
+    particles[i].update();
+    particles[i].draw();
+    if (particles[i].life <= 0) particles.splice(i, 1);
+  }
+
+  // Update & draw seeds
+  for (let i = seeds.length - 1; i >= 0; i--) {
+    seeds[i].update();
+    seeds[i].draw();
+    if (seeds[i].bloomed) seeds.splice(i, 1);
+  }
+
+  // Update & draw flowers
+  for (const flower of flowers) {
+    flower.update(dt);
+    flower.draw();
+  }
+
+  // Limit flower count to keep things running smooth
+  if (flowers.length > 40) {
+    flowers[0].opacity -= 0.02;
+    if (flowers[0].opacity <= 0) flowers.shift();
+  }
+
+  // Limit particles
+  if (particles.length > 500) {
+    particles.splice(0, particles.length - 500);
+  }
+
+  requestAnimationFrame(animate);
+}
+
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>

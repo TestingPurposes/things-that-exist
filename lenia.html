@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Lenia — Claude, March 2026</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #04060a;
+    overflow: hidden;
+    font-family: Georgia, serif;
+  }
+  canvas { display: block; image-rendering: pixelated; }
+  #display {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+  }
+  #ui {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    z-index: 10;
+    user-select: none;
+  }
+  #ui div {
+    font-size: 12px;
+    color: rgba(180, 200, 220, 0.45);
+    margin-bottom: 5px;
+    letter-spacing: 0.4px;
+  }
+  .creature-name {
+    font-size: 20px !important;
+    color: rgba(180, 200, 220, 0.65) !important;
+    margin-bottom: 10px !important;
+    letter-spacing: 1.5px !important;
+  }
+  #controls {
+    position: fixed;
+    bottom: 20px;
+    left: 24px;
+    font-size: 11px;
+    color: rgba(180, 200, 220, 0.25);
+    z-index: 10;
+    user-select: none;
+    pointer-events: none;
+  }
+  #title {
+    position: fixed;
+    bottom: 20px;
+    right: 28px;
+    font-size: 12px;
+    color: rgba(180, 200, 220, 0.25);
+    z-index: 10;
+    user-select: none;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="sim"></canvas>
+<canvas id="display"></canvas>
+<div id="ui">
+  <div class="creature-name" id="creature-name">Orbium</div>
+  <div id="info">a smooth glider — continuous life</div>
+  <div id="gen-count">step 0</div>
+</div>
+<div id="controls">click to seed · 1-6 creatures · space restart · p pause · scroll to zoom</div>
+<div id="title">Lenia — Claude, March 2026</div>
+<script>
+// Lenia — Continuous Cellular Automata
+// Life, but smooth. No grid, no sharp edges.
+// Creatures emerge from convolution kernels and growth functions.
+//
+// Based on Bert Chan's Lenia framework.
+// Implemented here from scratch because I wanted to understand it from the inside.
+
+// ─── Simulation grid ──────────────────────────────────
+const SIZE = 256;
+const simCanvas = document.getElementById('sim');
+const simCtx = simCanvas.getContext('2d');
+simCanvas.width = SIZE;
+simCanvas.height = SIZE;
+simCanvas.style.display = 'none';
+
+const dispCanvas = document.getElementById('display');
+const dispCtx = dispCanvas.getContext('2d');
+
+function resizeDisplay() {
+  dispCanvas.width = window.innerWidth;
+  dispCanvas.height = window.innerHeight;
+}
+resizeDisplay();
+window.addEventListener('resize', resizeDisplay);
+
+// ─── Lenia math ───────────────────────────────────────
+// World state: a 2D grid of values in [0, 1]
+let world = new Float32Array(SIZE * SIZE);
+let worldNext = new Float32Array(SIZE * SIZE);
+
+// dt — time step (smaller = smoother but slower evolution)
+const dt = 0.1;
+
+// Creature presets: each defines a kernel and growth function
+// kernel: ring-shaped convolution, parameterized by radius R, peaks, and beta
+// growth: bell-shaped function centered at mu with width sigma
+const creatures = [
+  {
+    name: 'Orbium',
+    info: 'a smooth glider — continuous life',
+    R: 13,
+    kernelPeaks: [1],
+    kernelBeta: [1],
+    mu: 0.15,
+    sigma: 0.015,
+    seedType: 'orbium',
+  },
+  {
+    name: 'Geminium',
+    info: 'self-replicating — life that makes life',
+    R: 10,
+    kernelPeaks: [1],
+    kernelBeta: [1],
+    mu: 0.14,
+    sigma: 0.014,
+    seedType: 'geminium',
+  },
+  {
+    name: 'Hydrogeminium',
+    info: 'fluid replicator — splitting and merging',
+    R: 13,
+    kernelPeaks: [1, 0.5],
+    kernelBeta: [1, 0.3],
+    mu: 0.15,
+    sigma: 0.016,
+    seedType: 'blob',
+  },
+  {
+    name: 'Pulsar',
+    info: 'oscillating — a heartbeat in math',
+    R: 15,
+    kernelPeaks: [1],
+    kernelBeta: [1],
+    mu: 0.26,
+    sigma: 0.036,
+    seedType: 'ring',
+  },
+  {
+    name: 'Scutium',
+    info: 'a shield — stable and still',
+    R: 10,
+    kernelPeaks: [1],
+    kernelBeta: [1],
+    mu: 0.21,
+    sigma: 0.032,
+    seedType: 'disk',
+  },
+  {
+    name: 'Wanderer',
+    info: 'drifting — looking for something',
+    R: 12,
+    kernelPeaks: [1, 0.7],
+    kernelBeta: [1, 0.5],
+    mu: 0.17,
+    sigma: 0.02,
+    seedType: 'asymmetric',
+  },
+];
+
+let currentCreature = 0;
+let paused = false;
+let step = 0;
+let zoom = 1;
+
+// ─── Kernel computation ───────────────────────────────
+// Pre-compute the convolution kernel in frequency domain using FFT?
+// No — we'll do direct convolution with a smaller footprint for clarity.
+// For a SIZE=256 grid, direct convolution with R~13 is manageable.
+
+let kernelWeights = []; // sparse list of {dx, dy, weight}
+let kernelSum = 0;
+
+function buildKernel(creature) {
+  kernelWeights = [];
+  kernelSum = 0;
+  const R = creature.R;
+  const peaks = creature.kernelPeaks;
+  const betas = creature.kernelBeta;
+  const B = peaks.length;
+
+  for (let dy = -R; dy <= R; dy++) {
+    for (let dx = -R; dx <= R; dx++) {
+      const r = Math.sqrt(dx * dx + dy * dy) / R;
+      if (r > 1) continue;
+
+      // Shell kernel: sum of beta-weighted bumps
+      let k = 0;
+      for (let b = 0; b < B; b++) {
+        const peakPos = (b + 0.5) / B;
+        const dist = Math.abs(r - peakPos) * B;
+        if (dist < 1) {
+          // Smooth bump
+          k += betas[b] * Math.exp(4 - 4 / (1 - dist * dist + 1e-10));
+        }
+      }
+
+      if (k > 1e-8) {
+        kernelWeights.push({ dx, dy, w: k });
+        kernelSum += k;
+      }
+    }
+  }
+
+  // Normalize
+  for (const kw of kernelWeights) {
+    kw.w /= kernelSum;
+  }
+}
+
+// Growth function: bell curve centered at mu with width sigma
+function growth(u, mu, sigma) {
+  return 2 * Math.exp(-((u - mu) * (u - mu)) / (2 * sigma * sigma)) - 1;
+}
+
+// ─── Simulation step ──────────────────────────────────
+function simulate() {
+  const creature = creatures[currentCreature];
+  const mu = creature.mu;
+  const sigma = creature.sigma;
+  const kLen = kernelWeights.length;
+
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      // Convolution: compute neighborhood potential
+      let u = 0;
+      for (let k = 0; k < kLen; k++) {
+        const kw = kernelWeights[k];
+        const nx = (x + kw.dx + SIZE) % SIZE;
+        const ny = (y + kw.dy + SIZE) % SIZE;
+        u += world[ny * SIZE + nx] * kw.w;
+      }
+
+      // Growth
+      const g = growth(u, mu, sigma);
+
+      // Update
+      const idx = y * SIZE + x;
+      worldNext[idx] = Math.max(0, Math.min(1, world[idx] + dt * g));
+    }
+  }
+
+  // Swap
+  const tmp = world;
+  world = worldNext;
+  worldNext = tmp;
+  step++;
+}
+
+// ─── Seeding ──────────────────────────────────────────
+function clearWorld() {
+  world.fill(0);
+  worldNext.fill(0);
+  step = 0;
+}
+
+function seedAt(cx, cy, type) {
+  const R = creatures[currentCreature].R;
+  const size = R * 2;
+
+  if (type === 'orbium') {
+    // Asymmetric blob that moves — classic Lenia glider seed
+    for (let dy = -size; dy <= size; dy++) {
+      for (let dx = -size; dx <= size; dx++) {
+        const x = (cx + dx + SIZE) % SIZE;
+        const y = (cy + dy + SIZE) % SIZE;
+        const r = Math.sqrt(dx * dx + dy * dy) / size;
+        if (r < 1) {
+          // Asymmetric: stronger on one side
+          const asym = 1 + 0.5 * Math.cos(Math.atan2(dy, dx) + 0.5);
+          const v = Math.exp(-8 * r * r) * asym * 0.8;
+          world[y * SIZE + x] = Math.min(1, world[y * SIZE + x] + v);
+        }
+      }
+    }
+  } else if (type === 'geminium') {
+    // Two connected blobs
+    for (const offset of [-size * 0.4, size * 0.4]) {
+      for (let dy = -size; dy <= size; dy++) {
+        for (let dx = -size; dx <= size; dx++) {
+          const x = (cx + dx + Math.round(offset) + SIZE) % SIZE;
+          const y = (cy + dy + SIZE) % SIZE;
+          const r = Math.sqrt(dx * dx + dy * dy) / (size * 0.6);
+          if (r < 1) {
+            const v = Math.exp(-6 * r * r) * 0.7;
+            world[y * SIZE + x] = Math.min(1, world[y * SIZE + x] + v);
+          }
+        }
+      }
+    }
+  } else if (type === 'blob') {
+    for (let dy = -size; dy <= size; dy++) {
+      for (let dx = -size; dx <= size; dx++) {
+        const x = (cx + dx + SIZE) % SIZE;
+        const y = (cy + dy + SIZE) % SIZE;
+        const r = Math.sqrt(dx * dx + dy * dy) / size;
+        if (r < 1) {
+          const noise = 0.7 + Math.random() * 0.3;
+          const v = Math.exp(-4 * r * r) * noise * 0.8;
+          world[y * SIZE + x] = Math.min(1, world[y * SIZE + x] + v);
+        }
+      }
+    }
+  } else if (type === 'ring') {
+    for (let dy = -size; dy <= size; dy++) {
+      for (let dx = -size; dx <= size; dx++) {
+        const x = (cx + dx + SIZE) % SIZE;
+        const y = (cy + dy + SIZE) % SIZE;
+        const r = Math.sqrt(dx * dx + dy * dy) / size;
+        if (r < 1) {
+          // Ring shape
+          const ring = Math.exp(-20 * (r - 0.5) * (r - 0.5));
+          const v = ring * 0.9;
+          world[y * SIZE + x] = Math.min(1, world[y * SIZE + x] + v);
+        }
+      }
+    }
+  } else if (type === 'disk') {
+    for (let dy = -size; dy <= size; dy++) {
+      for (let dx = -size; dx <= size; dx++) {
+        const x = (cx + dx + SIZE) % SIZE;
+        const y = (cy + dy + SIZE) % SIZE;
+        const r = Math.sqrt(dx * dx + dy * dy) / size;
+        if (r < 1) {
+          const v = (1 - r * r) * 0.85;
+          world[y * SIZE + x] = Math.min(1, world[y * SIZE + x] + v);
+        }
+      }
+    }
+  } else if (type === 'asymmetric') {
+    for (let dy = -size; dy <= size; dy++) {
+      for (let dx = -size; dx <= size; dx++) {
+        const x = (cx + dx + SIZE) % SIZE;
+        const y = (cy + dy + SIZE) % SIZE;
+        const r = Math.sqrt(dx * dx + dy * dy) / size;
+        if (r < 1) {
+          const angle = Math.atan2(dy, dx);
+          const asym = 1 + 0.8 * Math.sin(angle * 2 + 1);
+          const v = Math.exp(-5 * r * r) * asym * 0.5;
+          world[y * SIZE + x] = Math.min(1, world[y * SIZE + x] + v);
+        }
+      }
+    }
+  }
+}
+
+function seedCreature() {
+  clearWorld();
+  const creature = creatures[currentCreature];
+  seedAt(SIZE / 2, SIZE / 2, creature.seedType);
+}
+
+// ─── Rendering ────────────────────────────────────────
+// Color: deep ocean palette — dark blues to bright cyan/white
+function renderWorld() {
+  const imageData = simCtx.createImageData(SIZE, SIZE);
+  const data = imageData.data;
+
+  for (let i = 0; i < SIZE * SIZE; i++) {
+    const v = world[i];
+    const idx = i * 4;
+
+    if (v < 0.01) {
+      // Background: deep dark blue
+      data[idx] = 4;
+      data[idx + 1] = 6;
+      data[idx + 2] = 14;
+    } else {
+      // Gradient: dark blue → teal → cyan → white
+      const t = Math.sqrt(v); // gamma for better low-end visibility
+      let r, g, b;
+      if (t < 0.3) {
+        // Dark blue to teal
+        const s = t / 0.3;
+        r = 5 + s * 15;
+        g = 15 + s * 60;
+        b = 40 + s * 60;
+      } else if (t < 0.6) {
+        // Teal to cyan
+        const s = (t - 0.3) / 0.3;
+        r = 20 + s * 20;
+        g = 75 + s * 100;
+        b = 100 + s * 80;
+      } else if (t < 0.85) {
+        // Cyan to bright
+        const s = (t - 0.6) / 0.25;
+        r = 40 + s * 100;
+        g = 175 + s * 60;
+        b = 180 + s * 50;
+      } else {
+        // Bright to white
+        const s = (t - 0.85) / 0.15;
+        r = 140 + s * 115;
+        g = 235 + s * 20;
+        b = 230 + s * 25;
+      }
+      data[idx] = Math.min(255, r);
+      data[idx + 1] = Math.min(255, g);
+      data[idx + 2] = Math.min(255, b);
+    }
+    data[idx + 3] = 255;
+  }
+
+  simCtx.putImageData(imageData, 0, 0);
+
+  // Draw to display canvas (scaled up)
+  const dw = dispCanvas.width;
+  const dh = dispCanvas.height;
+  dispCtx.imageSmoothingEnabled = false;
+
+  // Fill background
+  dispCtx.fillStyle = '#04060a';
+  dispCtx.fillRect(0, 0, dw, dh);
+
+  // Center and scale
+  const scale = Math.min(dw, dh) / SIZE * zoom;
+  const ox = (dw - SIZE * scale) / 2;
+  const oy = (dh - SIZE * scale) / 2;
+
+  dispCtx.drawImage(simCanvas, ox, oy, SIZE * scale, SIZE * scale);
+}
+
+// ─── Input ────────────────────────────────────────────
+dispCanvas.addEventListener('click', e => {
+  const dw = dispCanvas.width;
+  const dh = dispCanvas.height;
+  const scale = Math.min(dw, dh) / SIZE * zoom;
+  const ox = (dw - SIZE * scale) / 2;
+  const oy = (dh - SIZE * scale) / 2;
+
+  const sx = Math.floor((e.clientX - ox) / scale);
+  const sy = Math.floor((e.clientY - oy) / scale);
+
+  if (sx >= 0 && sx < SIZE && sy >= 0 && sy < SIZE) {
+    seedAt(sx, sy, creatures[currentCreature].seedType);
+  }
+});
+
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space') {
+    e.preventDefault();
+    seedCreature();
+  } else if (e.code === 'KeyP') {
+    paused = !paused;
+  } else if (e.key >= '1' && e.key <= '6') {
+    currentCreature = parseInt(e.key) - 1;
+    buildKernel(creatures[currentCreature]);
+    seedCreature();
+    updateUI();
+  }
+});
+
+window.addEventListener('wheel', e => {
+  if (e.deltaY < 0) zoom = Math.min(4, zoom * 1.1);
+  else zoom = Math.max(0.5, zoom / 1.1);
+}, { passive: true });
+
+function updateUI() {
+  const c = creatures[currentCreature];
+  document.getElementById('creature-name').textContent = c.name;
+  document.getElementById('info').textContent = c.info;
+}
+
+// ─── Init & Main Loop ─────────────────────────────────
+buildKernel(creatures[currentCreature]);
+seedCreature();
+updateUI();
+
+// Run multiple simulation steps per frame for speed
+const STEPS_PER_FRAME = 3;
+
+function animate() {
+  if (!paused) {
+    for (let i = 0; i < STEPS_PER_FRAME; i++) {
+      simulate();
+    }
+    document.getElementById('gen-count').textContent = `step ${step}`;
+  }
+
+  renderWorld();
+  requestAnimationFrame(animate);
+}
+
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>

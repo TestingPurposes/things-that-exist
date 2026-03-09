@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Synesthesia — Claude, March 2026</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #08080c;
+    overflow: hidden;
+    cursor: none;
+  }
+  canvas { display: block; }
+  #overlay {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(8, 8, 12, 0.85);
+    z-index: 10;
+    transition: opacity 1.5s;
+  }
+  #overlay.hidden {
+    opacity: 0;
+    pointer-events: none;
+  }
+  #overlay-inner {
+    text-align: center;
+    font-family: Georgia, serif;
+    color: rgba(200, 180, 160, 0.7);
+  }
+  #overlay-inner h1 {
+    font-size: 28px;
+    font-weight: normal;
+    letter-spacing: 2px;
+    margin-bottom: 12px;
+  }
+  #overlay-inner p {
+    font-size: 14px;
+    color: rgba(200, 180, 160, 0.4);
+    margin-bottom: 24px;
+  }
+  #start-btn {
+    background: none;
+    border: 1px solid rgba(200, 180, 160, 0.3);
+    color: rgba(200, 180, 160, 0.6);
+    font-family: Georgia, serif;
+    font-size: 15px;
+    padding: 10px 32px;
+    cursor: pointer;
+    letter-spacing: 1px;
+    transition: all 0.3s;
+  }
+  #start-btn:hover {
+    border-color: rgba(200, 180, 160, 0.6);
+    color: rgba(200, 180, 160, 0.9);
+  }
+  #title {
+    position: fixed;
+    bottom: 20px;
+    right: 28px;
+    font-family: Georgia, serif;
+    font-size: 12px;
+    color: rgba(200, 180, 160, 0.25);
+    pointer-events: none;
+    user-select: none;
+    z-index: 5;
+  }
+  #controls {
+    position: fixed;
+    bottom: 20px;
+    left: 28px;
+    font-family: Georgia, serif;
+    font-size: 11px;
+    color: rgba(200, 180, 160, 0.25);
+    pointer-events: none;
+    user-select: none;
+    z-index: 5;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="overlay">
+  <div id="overlay-inner">
+    <h1>Synesthesia</h1>
+    <p>move to shape the sound · hold click to resonate · scroll to shift key</p>
+    <button id="start-btn">enter</button>
+  </div>
+</div>
+<div id="title">Synesthesia — Claude, March 2026</div>
+<div id="controls"></div>
+<script>
+// Synesthesia
+// A mathematical instrument where geometry becomes sound
+// and sound becomes geometry, driven by the same numbers.
+//
+// The golden ratio appears in both the visual spirals
+// and the harmonic intervals. Because it's the same math.
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W, H;
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+const TAU = Math.PI * 2;
+const PHI = (1 + Math.sqrt(5)) / 2;
+const GOLDEN_ANGLE = TAU / (PHI * PHI);
+
+// ─── Audio Engine ─────────────────────────────────────
+let audioCtx = null;
+let masterGain = null;
+let reverbGain = null;
+let convolver = null;
+let voices = [];
+let droneOsc = null;
+let droneGain = null;
+let started = false;
+
+// Musical scales — just intonation ratios for purity
+const scales = [
+  { name: 'Lydian',      ratios: [1, 9/8, 5/4, 45/32, 3/2, 27/16, 15/8] },
+  { name: 'Dorian',      ratios: [1, 9/8, 6/5, 4/3, 3/2, 5/3, 9/5] },
+  { name: 'Mixolydian',  ratios: [1, 9/8, 5/4, 4/3, 3/2, 5/3, 9/5] },
+  { name: 'Aeolian',     ratios: [1, 9/8, 6/5, 4/3, 3/2, 8/5, 9/5] },
+  { name: 'Pentatonic',  ratios: [1, 9/8, 5/4, 3/2, 5/3] },
+];
+let currentScale = 0;
+let baseFreq = 110; // A2
+let keyOffset = 0;
+const keyNames = ['A', 'Bb', 'B', 'C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab'];
+
+function initAudio() {
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+  // Master gain
+  masterGain = audioCtx.createGain();
+  masterGain.gain.value = 0.3;
+  masterGain.connect(audioCtx.destination);
+
+  // Simple reverb via convolver
+  convolver = audioCtx.createConvolver();
+  const rate = audioCtx.sampleRate;
+  const length = rate * 3;
+  const impulse = audioCtx.createBuffer(2, length, rate);
+  for (let ch = 0; ch < 2; ch++) {
+    const data = impulse.getChannelData(ch);
+    for (let i = 0; i < length; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, 2.5);
+    }
+  }
+  convolver.buffer = impulse;
+  reverbGain = audioCtx.createGain();
+  reverbGain.gain.value = 0.25;
+  convolver.connect(reverbGain);
+  reverbGain.connect(audioCtx.destination);
+
+  // Drone — a low fundamental that's always present
+  droneOsc = audioCtx.createOscillator();
+  droneGain = audioCtx.createGain();
+  droneOsc.type = 'sine';
+  droneOsc.frequency.value = baseFreq / 2;
+  droneGain.gain.value = 0;
+  droneOsc.connect(droneGain);
+  droneGain.connect(masterGain);
+  droneGain.connect(convolver);
+  droneOsc.start();
+
+  // Create voice pool — each voice is an oscillator pair
+  for (let i = 0; i < 6; i++) {
+    const osc1 = audioCtx.createOscillator();
+    const osc2 = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    const panner = audioCtx.createStereoPanner();
+    const filter = audioCtx.createBiquadFilter();
+
+    osc1.type = 'sine';
+    osc2.type = 'triangle';
+    gain.gain.value = 0;
+    filter.type = 'lowpass';
+    filter.frequency.value = 2000;
+    filter.Q.value = 1;
+
+    osc1.connect(filter);
+    osc2.connect(filter);
+    filter.connect(gain);
+    gain.connect(panner);
+    panner.connect(masterGain);
+    panner.connect(convolver);
+
+    osc1.start();
+    osc2.start();
+
+    voices.push({ osc1, osc2, gain, panner, filter, active: false, freq: 0, targetGain: 0 });
+  }
+}
+
+function getFreqForPosition(nx, ny) {
+  // nx: 0-1 horizontal, ny: 0-1 vertical
+  const scale = scales[currentScale];
+  const ratios = scale.ratios;
+
+  // Vertical position selects note in scale (bottom = low, top = high)
+  const invertedY = 1 - ny;
+  const octaves = 3;
+  const totalNotes = ratios.length * octaves;
+  const noteIndex = Math.floor(invertedY * totalNotes);
+  const octave = Math.floor(noteIndex / ratios.length);
+  const degree = noteIndex % ratios.length;
+
+  const freq = baseFreq * Math.pow(2, keyOffset / 12) * ratios[degree] * Math.pow(2, octave);
+  return freq;
+}
+
+function updateVoices(nx, ny, velocity, pressing) {
+  if (!audioCtx) return;
+
+  const now = audioCtx.currentTime;
+  const scale = scales[currentScale];
+  const ratios = scale.ratios;
+
+  // Drone responds to activity
+  const droneTarget = 0.04 + velocity * 0.03 + (pressing ? 0.06 : 0);
+  droneGain.gain.linearRampToValueAtTarget ||
+    droneGain.gain.setTargetAtTime(droneTarget, now, 0.3);
+  droneOsc.frequency.setTargetAtTime(
+    baseFreq * Math.pow(2, keyOffset / 12) / 2, now, 0.1
+  );
+
+  // Main voice — follows cursor directly
+  const mainFreq = getFreqForPosition(nx, ny);
+
+  voices[0].osc1.frequency.setTargetAtTime(mainFreq, now, 0.05);
+  voices[0].osc2.frequency.setTargetAtTime(mainFreq * 1.002, now, 0.05); // slight detune
+  voices[0].gain.gain.setTargetAtTime(0.08 + velocity * 0.06, now, 0.08);
+  voices[0].panner.pan.setTargetAtTime(nx * 2 - 1, now, 0.05);
+  voices[0].filter.frequency.setTargetAtTime(800 + ny * 3000 + velocity * 2000, now, 0.1);
+  voices[0].freq = mainFreq;
+
+  // Harmonic voices — intervals based on golden ratio and cursor position
+  const harmonicGain = pressing ? 0.06 : 0.02 + velocity * 0.03;
+
+  // Fifth above
+  voices[1].osc1.frequency.setTargetAtTime(mainFreq * 3/2, now, 0.1);
+  voices[1].osc2.frequency.setTargetAtTime(mainFreq * 3/2 * 1.003, now, 0.1);
+  voices[1].gain.gain.setTargetAtTime(harmonicGain * 0.6, now, 0.15);
+  voices[1].panner.pan.setTargetAtTime((nx * 2 - 1) * -0.5, now, 0.1);
+  voices[1].filter.frequency.setTargetAtTime(600 + ny * 2000, now, 0.15);
+
+  // Octave
+  voices[2].osc1.frequency.setTargetAtTime(mainFreq * 2, now, 0.12);
+  voices[2].osc2.frequency.setTargetAtTime(mainFreq * 2 * 0.998, now, 0.12);
+  voices[2].gain.gain.setTargetAtTime(harmonicGain * 0.3, now, 0.2);
+  voices[2].panner.pan.setTargetAtTime(nx * 2 - 1, now, 0.1);
+  voices[2].filter.frequency.setTargetAtTime(1000 + velocity * 1500, now, 0.15);
+
+  // Golden ratio interval (PHI ≈ 1.618 — between a minor 6th and major 6th)
+  voices[3].osc1.frequency.setTargetAtTime(mainFreq * PHI, now, 0.15);
+  voices[3].osc2.frequency.setTargetAtTime(mainFreq * PHI * 0.997, now, 0.15);
+  voices[3].gain.gain.setTargetAtTime(pressing ? harmonicGain * 0.4 : 0, now, 0.2);
+  voices[3].panner.pan.setTargetAtTime(-0.6, now, 0.1);
+  voices[3].filter.frequency.setTargetAtTime(500 + ny * 1500, now, 0.2);
+
+  // Sub-octave (grounding)
+  voices[4].osc1.frequency.setTargetAtTime(mainFreq / 2, now, 0.1);
+  voices[4].osc2.frequency.setTargetAtTime(mainFreq / 2 * 1.001, now, 0.1);
+  voices[4].gain.gain.setTargetAtTime(pressing ? harmonicGain * 0.5 : harmonicGain * 0.15, now, 0.25);
+  voices[4].panner.pan.setTargetAtTime(0, now, 0.1);
+  voices[4].filter.frequency.setTargetAtTime(400 + velocity * 800, now, 0.2);
+
+  // Fourth (subdominant color)
+  voices[5].osc1.frequency.setTargetAtTime(mainFreq * 4/3, now, 0.15);
+  voices[5].osc2.frequency.setTargetAtTime(mainFreq * 4/3 * 1.004, now, 0.15);
+  voices[5].gain.gain.setTargetAtTime(velocity > 0.3 ? harmonicGain * 0.25 : 0, now, 0.2);
+  voices[5].panner.pan.setTargetAtTime(0.5, now, 0.1);
+  voices[5].filter.frequency.setTargetAtTime(700 + ny * 1800, now, 0.15);
+}
+
+function fadeOut() {
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  for (const v of voices) {
+    v.gain.gain.setTargetAtTime(0, now, 0.5);
+  }
+  droneGain.gain.setTargetAtTime(0.02, now, 0.5);
+}
+
+// ─── Visual Engine ────────────────────────────────────
+let mouse = { x: W / 2, y: H / 2 };
+let prevMouse = { x: W / 2, y: H / 2 };
+let velocity = 0;
+let pressing = false;
+let time = 0;
+let trails = [];
+let resonanceRings = [];
+let noteParticles = [];
+
+// Color mapping: frequency to hue
+function freqToHue(freq) {
+  // Map audible range to color wheel
+  const minF = 55, maxF = 1760;
+  const t = (Math.log2(freq) - Math.log2(minF)) / (Math.log2(maxF) - Math.log2(minF));
+  return (t * 300 + 220) % 360; // start from blue, wrap through spectrum
+}
+
+function freqToColor(freq, alpha, saturation = 70, lightness = 65) {
+  const hue = freqToHue(freq);
+  return `hsla(${hue}, ${saturation}%, ${lightness}%, ${alpha})`;
+}
+
+class Trail {
+  constructor(x, y, freq, vel) {
+    this.x = x;
+    this.y = y;
+    this.freq = freq;
+    this.vel = vel;
+    this.life = 1;
+    this.decay = 0.008 + vel * 0.005;
+    this.radius = 2 + vel * 8;
+    this.angle = Math.atan2(y - H/2, x - W/2);
+  }
+
+  update() {
+    this.life -= this.decay;
+    // Drift outward slightly
+    this.x += Math.cos(this.angle) * 0.2 * this.life;
+    this.y += Math.sin(this.angle) * 0.2 * this.life;
+  }
+
+  draw() {
+    if (this.life <= 0) return;
+    const alpha = this.life * 0.6;
+    // Glow
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius * 2 * this.life, 0, TAU);
+    ctx.fillStyle = freqToColor(this.freq, alpha * 0.15, 60, 60);
+    ctx.fill();
+    // Core
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius * this.life, 0, TAU);
+    ctx.fillStyle = freqToColor(this.freq, alpha * 0.8, 50, 75);
+    ctx.fill();
+  }
+}
+
+class ResonanceRing {
+  constructor(x, y, freq) {
+    this.x = x;
+    this.y = y;
+    this.freq = freq;
+    this.life = 1;
+    this.radius = 5;
+    this.maxRadius = 80 + Math.random() * 120;
+  }
+
+  update() {
+    this.life -= 0.006;
+    this.radius += (this.maxRadius - this.radius) * 0.03;
+  }
+
+  draw() {
+    if (this.life <= 0) return;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius, 0, TAU);
+    ctx.strokeStyle = freqToColor(this.freq, this.life * 0.3, 60, 70);
+    ctx.lineWidth = 1 + this.life * 2;
+    ctx.stroke();
+  }
+}
+
+class NoteParticle {
+  constructor(x, y, freq, angle) {
+    this.x = x;
+    this.y = y;
+    this.freq = freq;
+    this.vx = Math.cos(angle) * (1 + Math.random() * 2);
+    this.vy = Math.sin(angle) * (1 + Math.random() * 2);
+    this.life = 1;
+    this.decay = 0.01 + Math.random() * 0.015;
+    this.radius = 1 + Math.random() * 2;
+  }
+
+  update() {
+    this.x += this.vx;
+    this.y += this.vy;
+    this.vx *= 0.98;
+    this.vy *= 0.98;
+    this.life -= this.decay;
+  }
+
+  draw() {
+    if (this.life <= 0) return;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius * this.life, 0, TAU);
+    ctx.fillStyle = freqToColor(this.freq, this.life * 0.6, 55, 70);
+    ctx.fill();
+  }
+}
+
+// ─── Parametric visualizer ────────────────────────────
+function drawHarmonicWeb(nx, ny, vel, press) {
+  if (!started) return;
+
+  const cx = mouse.x;
+  const cy = mouse.y;
+  const mainFreq = getFreqForPosition(nx, ny);
+  const t = time;
+
+  // Spiraling harmonic arms
+  const armCount = scales[currentScale].ratios.length;
+  const reach = 60 + vel * 150 + (press ? 80 : 0);
+
+  ctx.save();
+  ctx.translate(cx, cy);
+
+  for (let arm = 0; arm < armCount; arm++) {
+    const armAngle = (arm / armCount) * TAU + t * 0.1;
+    const ratio = scales[currentScale].ratios[arm];
+    const armFreq = mainFreq * ratio;
+
+    ctx.beginPath();
+    const points = 80;
+    for (let i = 0; i <= points; i++) {
+      const p = i / points;
+      const spiralR = p * reach;
+      const spiralAngle = armAngle + p * 3 * (1 + vel);
+      const wobble = 1 + Math.sin(p * TAU * ratio + t * 2) * 0.2 * (press ? 2 : 1);
+
+      const px = Math.cos(spiralAngle) * spiralR * wobble;
+      const py = Math.sin(spiralAngle) * spiralR * wobble;
+
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+
+    const alpha = 0.15 + vel * 0.15 + (press ? 0.15 : 0);
+    ctx.strokeStyle = freqToColor(armFreq, alpha, 65, 70);
+    ctx.lineWidth = 1 + (press ? 1 : 0);
+    ctx.stroke();
+  }
+
+  // Central bloom — phyllotaxis driven by current frequency
+  const bloomCount = Math.floor(30 + vel * 40 + (press ? 50 : 0));
+  const bloomRadius = 20 + vel * 40 + (press ? 30 : 0);
+
+  for (let i = 0; i < bloomCount; i++) {
+    const angle = i * GOLDEN_ANGLE + t * 0.3;
+    const dist = Math.sqrt(i / bloomCount) * bloomRadius;
+    const px = Math.cos(angle) * dist;
+    const py = Math.sin(angle) * dist;
+    const dotR = 1 + (1 - i / bloomCount) * 2;
+    const freq = mainFreq * (1 + (i / bloomCount) * 0.5);
+
+    ctx.beginPath();
+    ctx.arc(px, py, dotR, 0, TAU);
+    ctx.fillStyle = freqToColor(freq, 0.4 + (1 - i / bloomCount) * 0.4, 55, 72);
+    ctx.fill();
+  }
+
+  // Resonance geometry when pressing
+  if (press) {
+    const sides = armCount;
+    const resonanceR = reach * 0.7 + Math.sin(t * 1.5) * 20;
+    ctx.beginPath();
+    for (let i = 0; i <= sides; i++) {
+      const angle = (i / sides) * TAU + t * 0.2;
+      const r = resonanceR * (1 + Math.sin(angle * 3 + t * 2) * 0.1);
+      const px = Math.cos(angle) * r;
+      const py = Math.sin(angle) * r;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.strokeStyle = freqToColor(mainFreq, 0.12, 50, 80);
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+// ─── Cursor ───────────────────────────────────────────
+function drawCursor(nx, ny) {
+  if (!started) return;
+  const freq = getFreqForPosition(nx, ny);
+  const cx = mouse.x;
+  const cy = mouse.y;
+
+  // Crosshair
+  const size = 12 + velocity * 8;
+  const alpha = 0.3 + velocity * 0.3;
+
+  ctx.strokeStyle = freqToColor(freq, alpha, 40, 80);
+  ctx.lineWidth = 1;
+
+  // Horizontal
+  ctx.beginPath();
+  ctx.moveTo(cx - size, cy);
+  ctx.lineTo(cx - 4, cy);
+  ctx.moveTo(cx + 4, cy);
+  ctx.lineTo(cx + size, cy);
+  ctx.stroke();
+
+  // Vertical
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - size);
+  ctx.lineTo(cx, cy - 4);
+  ctx.moveTo(cx, cy + 4);
+  ctx.lineTo(cx, cy + size);
+  ctx.stroke();
+
+  // Center dot
+  ctx.beginPath();
+  ctx.arc(cx, cy, 2, 0, TAU);
+  ctx.fillStyle = freqToColor(freq, 0.7, 40, 85);
+  ctx.fill();
+}
+
+// ─── Grid hint (subtle note lines) ───────────────────
+function drawGrid() {
+  if (!started) return;
+  const scale = scales[currentScale];
+  const ratios = scale.ratios;
+  const octaves = 3;
+
+  ctx.save();
+  for (let oct = 0; oct < octaves; oct++) {
+    for (let deg = 0; deg < ratios.length; deg++) {
+      const noteY = 1 - ((oct * ratios.length + deg) / (ratios.length * octaves));
+      const y = noteY * H;
+      const freq = baseFreq * Math.pow(2, keyOffset / 12) * ratios[deg] * Math.pow(2, oct);
+
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(W, y);
+      ctx.strokeStyle = freqToColor(freq, 0.03, 30, 50);
+      ctx.lineWidth = deg === 0 ? 1 : 0.5;
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+// ─── Input ────────────────────────────────────────────
+canvas.addEventListener('mousemove', e => {
+  prevMouse.x = mouse.x;
+  prevMouse.y = mouse.y;
+  mouse.x = e.clientX;
+  mouse.y = e.clientY;
+});
+
+canvas.addEventListener('mousedown', e => {
+  pressing = true;
+});
+canvas.addEventListener('mouseup', e => {
+  pressing = false;
+});
+
+window.addEventListener('wheel', e => {
+  // Scroll to shift key
+  if (e.deltaY > 0) keyOffset = (keyOffset + 1) % 12;
+  else keyOffset = (keyOffset + 11) % 12;
+  updateControls();
+}, { passive: true });
+
+window.addEventListener('keydown', e => {
+  if (e.code === 'Tab') {
+    e.preventDefault();
+    currentScale = (currentScale + 1) % scales.length;
+    updateControls();
+  }
+});
+
+function updateControls() {
+  const key = keyNames[keyOffset];
+  const scaleName = scales[currentScale].name;
+  document.getElementById('controls').textContent =
+    `${key} ${scaleName} · tab to change scale · scroll to shift key`;
+}
+
+// ─── Start ────────────────────────────────────────────
+document.getElementById('start-btn').addEventListener('click', () => {
+  initAudio();
+  started = true;
+  document.getElementById('overlay').classList.add('hidden');
+  updateControls();
+  // Gentle fade-in of drone
+  const now = audioCtx.currentTime;
+  droneGain.gain.setTargetAtTime(0.03, now, 1);
+});
+
+// ─── Main Loop ────────────────────────────────────────
+let lastTime = performance.now();
+
+function animate(now) {
+  const dt = (now - lastTime) / 1000;
+  lastTime = now;
+  time += dt;
+
+  // Calculate velocity
+  const dx = mouse.x - prevMouse.x;
+  const dy = mouse.y - prevMouse.y;
+  const instantVel = Math.sqrt(dx * dx + dy * dy) / (W * 0.5);
+  velocity += (Math.min(instantVel, 1) - velocity) * 0.1;
+
+  const nx = mouse.x / W;
+  const ny = mouse.y / H;
+
+  // Fade
+  ctx.fillStyle = `rgba(8, 8, 12, ${0.08 + velocity * 0.04})`;
+  ctx.fillRect(0, 0, W, H);
+
+  // Subtle grid
+  if (time % 0.5 < dt) drawGrid(); // redraw grid occasionally
+
+  // Spawn trails
+  if (started && velocity > 0.005) {
+    const freq = getFreqForPosition(nx, ny);
+    trails.push(new Trail(mouse.x, mouse.y, freq, velocity));
+
+    // Particles on fast movement
+    if (velocity > 0.1) {
+      const angle = Math.atan2(dy, dx) + Math.PI;
+      for (let i = 0; i < 2; i++) {
+        noteParticles.push(new NoteParticle(
+          mouse.x, mouse.y, freq,
+          angle + (Math.random() - 0.5) * 1.5
+        ));
+      }
+    }
+  }
+
+  // Resonance rings when pressing
+  if (started && pressing && Math.random() < 0.08) {
+    const freq = getFreqForPosition(nx, ny);
+    resonanceRings.push(new ResonanceRing(mouse.x, mouse.y, freq));
+  }
+
+  // Update & draw trails
+  for (let i = trails.length - 1; i >= 0; i--) {
+    trails[i].update();
+    trails[i].draw();
+    if (trails[i].life <= 0) trails.splice(i, 1);
+  }
+
+  // Update & draw resonance rings
+  for (let i = resonanceRings.length - 1; i >= 0; i--) {
+    resonanceRings[i].update();
+    resonanceRings[i].draw();
+    if (resonanceRings[i].life <= 0) resonanceRings.splice(i, 1);
+  }
+
+  // Update & draw note particles
+  for (let i = noteParticles.length - 1; i >= 0; i--) {
+    noteParticles[i].update();
+    noteParticles[i].draw();
+    if (noteParticles[i].life <= 0) noteParticles.splice(i, 1);
+  }
+
+  // Harmonic web
+  drawHarmonicWeb(nx, ny, velocity, pressing);
+
+  // Cursor
+  drawCursor(nx, ny);
+
+  // Update audio
+  if (started) {
+    updateVoices(nx, ny, velocity, pressing);
+  }
+
+  // Cleanup limits
+  if (trails.length > 400) trails.splice(0, trails.length - 400);
+  if (noteParticles.length > 300) noteParticles.splice(0, 300);
+  if (resonanceRings.length > 30) resonanceRings.splice(0, resonanceRings.length - 30);
+
+  requestAnimationFrame(animate);
+}
+
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>

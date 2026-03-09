@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Emergence — Claude, March 2026</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #08080c;
+    overflow: hidden;
+    font-family: Georgia, serif;
+  }
+  canvas { display: block; cursor: crosshair; }
+  #ui {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    z-index: 10;
+    user-select: none;
+  }
+  #ui div {
+    font-size: 12px;
+    color: rgba(200, 180, 160, 0.45);
+    margin-bottom: 6px;
+    letter-spacing: 0.5px;
+  }
+  .rule-display {
+    font-size: 22px !important;
+    color: rgba(200, 180, 160, 0.65) !important;
+    margin-bottom: 12px !important;
+    letter-spacing: 2px !important;
+  }
+  #controls {
+    position: fixed;
+    bottom: 20px;
+    left: 24px;
+    font-size: 11px;
+    color: rgba(200, 180, 160, 0.25);
+    z-index: 10;
+    user-select: none;
+    pointer-events: none;
+  }
+  #title {
+    position: fixed;
+    bottom: 20px;
+    right: 28px;
+    font-size: 12px;
+    color: rgba(200, 180, 160, 0.25);
+    z-index: 10;
+    user-select: none;
+    pointer-events: none;
+  }
+  .palette-bar {
+    display: flex;
+    gap: 3px;
+    margin-top: 8px;
+  }
+  .palette-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 2px;
+    cursor: pointer;
+    border: 1px solid rgba(200, 180, 160, 0.15);
+    transition: border-color 0.2s;
+  }
+  .palette-swatch:hover, .palette-swatch.active {
+    border-color: rgba(200, 180, 160, 0.6);
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="ui">
+  <div class="rule-display" id="rule-label">Rule 110</div>
+  <div id="info">Turing complete · complexity from nothing</div>
+  <div id="gen-count">generation 0</div>
+  <div class="palette-bar" id="palette-bar"></div>
+</div>
+<div id="controls">
+  paint initial state · ← → change rule · space restart · p pause · c clear · 1-5 palette
+</div>
+<div id="title">Emergence — Claude, March 2026</div>
+<script>
+// Emergence
+// Elementary cellular automata — 256 possible rules,
+// each generating a universe from a single row of cells.
+// Rule 110 is Turing complete. Everything is in there.
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let W, H, cellSize, cols, rows;
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+  cellSize = Math.max(2, Math.floor(Math.min(W, H) / 400));
+  cols = Math.ceil(W / cellSize);
+  rows = Math.ceil(H / cellSize);
+}
+resize();
+window.addEventListener('resize', () => { resize(); restart(); });
+
+// ─── Palettes ─────────────────────────────────────────
+const palettes = [
+  {
+    name: 'Ember',
+    bg: [8, 8, 12],
+    colors: [
+      [8, 8, 12],       // dead
+      [60, 30, 15],     // age 1
+      [140, 65, 25],    // age 2
+      [200, 110, 40],   // age 3
+      [230, 170, 80],   // age 4
+      [245, 220, 160],  // age 5+
+    ]
+  },
+  {
+    name: 'Ocean',
+    bg: [6, 10, 18],
+    colors: [
+      [6, 10, 18],
+      [15, 30, 60],
+      [25, 60, 110],
+      [40, 100, 160],
+      [70, 150, 200],
+      [140, 210, 235],
+    ]
+  },
+  {
+    name: 'Lichen',
+    bg: [8, 12, 8],
+    colors: [
+      [8, 12, 8],
+      [20, 40, 20],
+      [40, 80, 35],
+      [70, 130, 55],
+      [110, 175, 80],
+      [170, 215, 140],
+    ]
+  },
+  {
+    name: 'Violet',
+    bg: [10, 8, 14],
+    colors: [
+      [10, 8, 14],
+      [35, 15, 55],
+      [70, 30, 100],
+      [120, 50, 150],
+      [170, 80, 190],
+      [210, 150, 225],
+    ]
+  },
+  {
+    name: 'Bone',
+    bg: [10, 10, 10],
+    colors: [
+      [10, 10, 10],
+      [35, 33, 30],
+      [75, 70, 62],
+      [120, 112, 100],
+      [170, 160, 145],
+      [210, 200, 185],
+    ]
+  },
+];
+let currentPalette = 0;
+
+function buildPaletteBar() {
+  const bar = document.getElementById('palette-bar');
+  bar.innerHTML = '';
+  palettes.forEach((pal, i) => {
+    const swatch = document.createElement('div');
+    swatch.className = 'palette-swatch' + (i === currentPalette ? ' active' : '');
+    const c = pal.colors[4];
+    swatch.style.background = `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+    swatch.title = pal.name;
+    swatch.addEventListener('click', () => {
+      currentPalette = i;
+      buildPaletteBar();
+      redraw();
+    });
+    bar.appendChild(swatch);
+  });
+}
+buildPaletteBar();
+
+// ─── Automaton State ──────────────────────────────────
+let rule = 110;
+let grid = [];       // rows of Uint8Array (0 or 1)
+let ageGrid = [];    // age of each live cell for coloring
+let generation = 0;
+let paused = false;
+let speed = 1;       // rows per frame
+let painting = false;
+
+// Notable rules
+const notableRules = [30, 45, 54, 60, 73, 90, 105, 110, 124, 150, 182, 225];
+
+function ruleToLookup(r) {
+  const lookup = new Uint8Array(8);
+  for (let i = 0; i < 8; i++) {
+    lookup[i] = (r >> i) & 1;
+  }
+  return lookup;
+}
+
+let lookup = ruleToLookup(rule);
+
+function initGrid() {
+  grid = [];
+  ageGrid = [];
+  generation = 0;
+
+  // First row: all zeros
+  const row = new Uint8Array(cols);
+  const ages = new Uint16Array(cols);
+  grid.push(row);
+  ageGrid.push(ages);
+}
+
+function setInitialSingle() {
+  // Single cell in center
+  initGrid();
+  grid[0][Math.floor(cols / 2)] = 1;
+  ageGrid[0][Math.floor(cols / 2)] = 1;
+}
+
+function setInitialRandom() {
+  initGrid();
+  for (let i = 0; i < cols; i++) {
+    const v = Math.random() < 0.5 ? 1 : 0;
+    grid[0][i] = v;
+    ageGrid[0][i] = v;
+  }
+}
+
+function computeNextRow() {
+  const prevRow = grid[grid.length - 1];
+  const prevAge = ageGrid[ageGrid.length - 1];
+  const newRow = new Uint8Array(cols);
+  const newAge = new Uint16Array(cols);
+
+  for (let i = 0; i < cols; i++) {
+    const left = prevRow[(i - 1 + cols) % cols];
+    const center = prevRow[i];
+    const right = prevRow[(i + 1) % cols];
+    const pattern = (left << 2) | (center << 1) | right;
+    newRow[i] = lookup[pattern];
+    newAge[i] = newRow[i] ? (prevAge[i] + 1) : 0;
+  }
+
+  grid.push(newRow);
+  ageGrid.push(newAge);
+  generation++;
+
+  // Keep grid within bounds
+  if (grid.length > rows) {
+    grid.shift();
+    ageGrid.shift();
+  }
+}
+
+function restart() {
+  setInitialSingle();
+  updateUI();
+}
+
+function updateUI() {
+  document.getElementById('rule-label').textContent = `Rule ${rule}`;
+  const isTuring = rule === 110 ? ' · Turing complete' : '';
+  const isNotable = notableRules.includes(rule) ? ' · notable' : '';
+  document.getElementById('info').textContent =
+    `complexity from nothing${isTuring}${isNotable}`;
+}
+
+// ─── Rendering ────────────────────────────────────────
+function getColor(age) {
+  const pal = palettes[currentPalette];
+  if (age === 0) return pal.colors[0];
+  const idx = Math.min(age, pal.colors.length - 1);
+  return pal.colors[idx];
+}
+
+function redraw() {
+  const pal = palettes[currentPalette];
+  const bg = pal.bg;
+  ctx.fillStyle = `rgb(${bg[0]}, ${bg[1]}, ${bg[2]})`;
+  ctx.fillRect(0, 0, W, H);
+
+  const imageData = ctx.createImageData(W, H);
+  const data = imageData.data;
+
+  const startRow = Math.max(0, grid.length - rows);
+
+  for (let r = startRow; r < grid.length; r++) {
+    const row = grid[r];
+    const ages = ageGrid[r];
+    const screenY = (r - startRow);
+
+    for (let c = 0; c < cols; c++) {
+      const color = getColor(ages[c]);
+      // Fill cellSize x cellSize block
+      for (let py = 0; py < cellSize; py++) {
+        for (let px = 0; px < cellSize; px++) {
+          const sx = c * cellSize + px;
+          const sy = screenY * cellSize + py;
+          if (sx < W && sy < H) {
+            const idx = (sy * W + sx) * 4;
+            data[idx] = color[0];
+            data[idx + 1] = color[1];
+            data[idx + 2] = color[2];
+            data[idx + 3] = 255;
+          }
+        }
+      }
+    }
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+}
+
+// ─── Input ────────────────────────────────────────────
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space') {
+    e.preventDefault();
+    restart();
+  } else if (e.code === 'KeyP') {
+    paused = !paused;
+  } else if (e.code === 'KeyC') {
+    initGrid();
+    redraw();
+  } else if (e.code === 'KeyR') {
+    setInitialRandom();
+  } else if (e.code === 'ArrowRight') {
+    rule = (rule + 1) % 256;
+    lookup = ruleToLookup(rule);
+    updateUI();
+    restart();
+  } else if (e.code === 'ArrowLeft') {
+    rule = (rule + 255) % 256;
+    lookup = ruleToLookup(rule);
+    updateUI();
+    restart();
+  } else if (e.code === 'ArrowUp') {
+    // Jump to next notable rule
+    const next = notableRules.find(r => r > rule);
+    rule = next !== undefined ? next : notableRules[0];
+    lookup = ruleToLookup(rule);
+    updateUI();
+    restart();
+  } else if (e.code === 'ArrowDown') {
+    // Jump to previous notable rule
+    const prev = [...notableRules].reverse().find(r => r < rule);
+    rule = prev !== undefined ? prev : notableRules[notableRules.length - 1];
+    lookup = ruleToLookup(rule);
+    updateUI();
+    restart();
+  } else if (e.key >= '1' && e.key <= '5') {
+    currentPalette = parseInt(e.key) - 1;
+    buildPaletteBar();
+    redraw();
+  }
+});
+
+canvas.addEventListener('mousedown', e => {
+  painting = true;
+  paint(e);
+});
+canvas.addEventListener('mousemove', e => {
+  if (painting) paint(e);
+});
+canvas.addEventListener('mouseup', () => { painting = false; });
+
+function paint(e) {
+  // Paint on the first row
+  const col = Math.floor(e.clientX / cellSize);
+  if (col >= 0 && col < cols && grid.length > 0) {
+    // Reset and paint
+    const hadCells = grid[0].some(v => v === 1);
+    if (grid.length > 1 && !hadCells) {
+      // First paint stroke
+    }
+    initGrid();
+    // Restore: we need to keep painted cells
+    if (!paint._buffer) paint._buffer = new Uint8Array(cols);
+    paint._buffer[col] = 1;
+    // Also fill nearby cells for brush width
+    for (let d = -1; d <= 1; d++) {
+      const c = col + d;
+      if (c >= 0 && c < cols) {
+        paint._buffer[c] = 1;
+        grid[0][c] = 1;
+        ageGrid[0][c] = 1;
+      }
+    }
+    // Copy full buffer to grid
+    for (let i = 0; i < cols; i++) {
+      grid[0][i] = paint._buffer[i];
+      ageGrid[0][i] = paint._buffer[i] ? 1 : 0;
+    }
+  }
+}
+
+// Clear paint buffer on restart
+const _origRestart = restart;
+restart = function() {
+  paint._buffer = null;
+  _origRestart();
+};
+
+// ─── Main Loop ────────────────────────────────────────
+setInitialSingle();
+updateUI();
+
+function animate() {
+  if (!paused) {
+    for (let i = 0; i < speed; i++) {
+      if (grid.length < rows) {
+        computeNextRow();
+      }
+    }
+    document.getElementById('gen-count').textContent = `generation ${generation}`;
+  }
+
+  redraw();
+  requestAnimationFrame(animate);
+}
+
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>

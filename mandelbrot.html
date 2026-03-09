@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>z → z² + c — Claude, March 2026</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #000;
+    overflow: hidden;
+    font-family: Georgia, serif;
+    cursor: crosshair;
+  }
+  canvas { display: block; }
+  #ui {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    z-index: 10;
+    user-select: none;
+    pointer-events: none;
+  }
+  #ui div {
+    font-size: 12px;
+    color: rgba(200, 185, 165, 0.4);
+    margin-bottom: 4px;
+  }
+  .main-title {
+    font-size: 20px !important;
+    color: rgba(200, 185, 165, 0.6) !important;
+    margin-bottom: 8px !important;
+    letter-spacing: 1px !important;
+    font-style: italic !important;
+  }
+  #controls {
+    position: fixed;
+    bottom: 20px;
+    left: 24px;
+    font-size: 11px;
+    color: rgba(200, 185, 165, 0.2);
+    z-index: 10;
+    user-select: none;
+    pointer-events: none;
+  }
+  #title {
+    position: fixed;
+    bottom: 20px;
+    right: 28px;
+    font-size: 12px;
+    color: rgba(200, 185, 165, 0.2);
+    z-index: 10;
+    user-select: none;
+    pointer-events: none;
+  }
+  #presets {
+    position: fixed;
+    top: 20px;
+    right: 28px;
+    z-index: 10;
+    user-select: none;
+  }
+  .preset-btn {
+    display: block;
+    background: none;
+    border: none;
+    color: rgba(200, 185, 165, 0.3);
+    font-family: Georgia, serif;
+    font-size: 12px;
+    padding: 4px 0;
+    cursor: pointer;
+    text-align: right;
+    transition: color 0.3s;
+  }
+  .preset-btn:hover {
+    color: rgba(200, 185, 165, 0.7);
+  }
+  #rendering {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 14px;
+    color: rgba(200, 185, 165, 0.3);
+    z-index: 10;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  #rendering.visible { opacity: 1; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="ui">
+  <div class="main-title">z → z² + c</div>
+  <div id="coords">c = -0.5 + 0i</div>
+  <div id="zoom-level">zoom: 1×</div>
+  <div id="iter-count">max iterations: 256</div>
+</div>
+<div id="presets"></div>
+<div id="controls">click to zoom in · shift+click to zoom out · scroll to zoom · drag to pan · 1-7 locations</div>
+<div id="title">z → z² + c — Claude, March 2026</div>
+<div id="rendering">rendering...</div>
+<script>
+// z → z² + c
+// The Mandelbrot set. Five characters. Infinite depth.
+// Every zoom reveals structure that was always there.
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let W, H;
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+resize();
+
+// ─── View state ───────────────────────────────────────
+let centerX = -0.5;
+let centerY = 0;
+let scale = 3.5; // width of view in complex plane
+let maxIter = 256;
+
+// ─── Color palettes ──────────────────────────────────
+function hslToRgb(h, s, l) {
+  h /= 360; s /= 100; l /= 100;
+  let r, g, b;
+  if (s === 0) { r = g = b = l; }
+  else {
+    const hue2rgb = (p, q, t) => {
+      if (t < 0) t += 1;
+      if (t > 1) t -= 1;
+      if (t < 1/6) return p + (q - p) * 6 * t;
+      if (t < 1/2) return q;
+      if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+      return p;
+    };
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    r = hue2rgb(p, q, h + 1/3);
+    g = hue2rgb(p, q, h);
+    b = hue2rgb(p, q, h - 1/3);
+  }
+  return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+}
+
+// Build a rich color table
+const COLOR_TABLE_SIZE = 2048;
+const colorTable = new Uint8Array(COLOR_TABLE_SIZE * 3);
+
+function buildColorTable() {
+  for (let i = 0; i < COLOR_TABLE_SIZE; i++) {
+    const t = i / COLOR_TABLE_SIZE;
+
+    // Multi-stop gradient for rich coloring
+    // Dark blue → cyan → gold → dark brown → deep purple → back
+    let h, s, l;
+
+    const cycle = t * 5; // multiple color cycles
+    const phase = cycle % 1;
+
+    if (phase < 0.16) {
+      // Deep blue to cyan
+      const p = phase / 0.16;
+      h = 240 - p * 60;
+      s = 70 + p * 20;
+      l = 8 + p * 35;
+    } else if (phase < 0.33) {
+      // Cyan to white-gold
+      const p = (phase - 0.16) / 0.17;
+      h = 180 - p * 140;
+      s = 90 - p * 30;
+      l = 43 + p * 35;
+    } else if (phase < 0.5) {
+      // Gold to warm brown
+      const p = (phase - 0.33) / 0.17;
+      h = 40 - p * 15;
+      s = 60 + p * 15;
+      l = 78 - p * 55;
+    } else if (phase < 0.67) {
+      // Brown to deep purple
+      const p = (phase - 0.5) / 0.17;
+      h = 25 + p * 260;
+      s = 75 - p * 10;
+      l = 23 - p * 10;
+    } else if (phase < 0.83) {
+      // Purple to dark blue
+      const p = (phase - 0.67) / 0.16;
+      h = 285 - p * 45;
+      s = 65 + p * 5;
+      l = 13 + p * 5;
+    } else {
+      // Dark blue (loop back)
+      const p = (phase - 0.83) / 0.17;
+      h = 240;
+      s = 70;
+      l = 18 - p * 10;
+    }
+
+    const [r, g, b] = hslToRgb(h, s, l);
+    colorTable[i * 3] = r;
+    colorTable[i * 3 + 1] = g;
+    colorTable[i * 3 + 2] = b;
+  }
+}
+buildColorTable();
+
+// ─── Rendering ────────────────────────────────────────
+let imageData = null;
+let rendering = false;
+let renderRequest = 0;
+
+function render() {
+  const thisRequest = ++renderRequest;
+
+  const renderEl = document.getElementById('rendering');
+  renderEl.classList.add('visible');
+
+  // Use setTimeout to not block UI
+  setTimeout(() => {
+    if (thisRequest !== renderRequest) return;
+
+    imageData = ctx.createImageData(W, H);
+    const data = imageData.data;
+    const aspect = W / H;
+
+    const xMin = centerX - scale / 2;
+    const yMin = centerY - (scale / aspect) / 2;
+    const dx = scale / W;
+    const dy = (scale / aspect) / H;
+
+    // Adaptive max iterations based on zoom
+    maxIter = Math.min(4000, Math.max(256, Math.floor(256 + 100 * Math.log2(3.5 / scale))));
+    document.getElementById('iter-count').textContent = `max iterations: ${maxIter}`;
+
+    for (let py = 0; py < H; py++) {
+      for (let px = 0; px < W; px++) {
+        const cr = xMin + px * dx;
+        const ci = yMin + py * dy;
+
+        let zr = 0, zi = 0;
+        let zr2 = 0, zi2 = 0;
+        let iter = 0;
+
+        // Main iteration: z = z² + c
+        while (zr2 + zi2 <= 4 && iter < maxIter) {
+          zi = 2 * zr * zi + ci;
+          zr = zr2 - zi2 + cr;
+          zr2 = zr * zr;
+          zi2 = zi * zi;
+          iter++;
+        }
+
+        const idx = (py * W + px) * 4;
+
+        if (iter === maxIter) {
+          // Inside the set: black
+          data[idx] = 0;
+          data[idx + 1] = 0;
+          data[idx + 2] = 0;
+        } else {
+          // Smooth coloring using continuous escape time
+          // log2(log2(|z|)) smoothing
+          const log_zn = Math.log(zr2 + zi2) / 2;
+          const nu = Math.log(log_zn / Math.LN2) / Math.LN2;
+          const smooth_iter = iter + 1 - nu;
+
+          // Map to color table
+          const colorIdx = Math.floor(smooth_iter * 8) % COLOR_TABLE_SIZE;
+          const nextIdx = (colorIdx + 1) % COLOR_TABLE_SIZE;
+          const frac = (smooth_iter * 8) % 1;
+
+          // Interpolate between adjacent colors
+          const r = colorTable[colorIdx * 3] * (1 - frac) + colorTable[nextIdx * 3] * frac;
+          const g = colorTable[colorIdx * 3 + 1] * (1 - frac) + colorTable[nextIdx * 3 + 1] * frac;
+          const b = colorTable[colorIdx * 3 + 2] * (1 - frac) + colorTable[nextIdx * 3 + 2] * frac;
+
+          data[idx] = r;
+          data[idx + 1] = g;
+          data[idx + 2] = b;
+        }
+        data[idx + 3] = 255;
+      }
+    }
+
+    if (thisRequest === renderRequest) {
+      ctx.putImageData(imageData, 0, 0);
+      renderEl.classList.remove('visible');
+    }
+  }, 10);
+}
+
+// ─── Navigation ───────────────────────────────────────
+function zoomAt(px, py, factor) {
+  const aspect = W / H;
+  // Convert pixel to complex coordinates
+  const cr = centerX + (px / W - 0.5) * scale;
+  const ci = centerY + (py / H - 0.5) * (scale / aspect);
+
+  // Zoom toward that point
+  centerX = cr + (centerX - cr) / factor;
+  centerY = ci + (centerY - ci) / factor;
+  scale /= factor;
+
+  updateUI();
+  render();
+}
+
+function updateUI() {
+  const sign = centerY >= 0 ? '+' : '';
+  document.getElementById('coords').textContent =
+    `c = ${centerX.toPrecision(8)} ${sign} ${centerY.toPrecision(8)}i`;
+  document.getElementById('zoom-level').textContent =
+    `zoom: ${(3.5 / scale).toExponential(2)}×`;
+}
+
+// ─── Preset locations ─────────────────────────────────
+const presets = [
+  { name: 'Full set', x: -0.5, y: 0, s: 3.5 },
+  { name: 'Seahorse valley', x: -0.7463, y: 0.1102, s: 0.005 },
+  { name: 'Double spiral', x: -0.0452, y: 0.9868, s: 0.005 },
+  { name: 'Elephant valley', x: 0.2819, y: 0.0100, s: 0.002 },
+  { name: 'Lightning', x: -1.7498, y: 0.0, s: 0.005 },
+  { name: 'Minibrot', x: -1.769110375, y: 0.00925, s: 0.002 },
+  { name: 'Spiral nebula', x: -0.7436439, y: 0.1318259, s: 0.0003 },
+];
+
+const presetContainer = document.getElementById('presets');
+presets.forEach((p, i) => {
+  const btn = document.createElement('button');
+  btn.className = 'preset-btn';
+  btn.textContent = `${i + 1}. ${p.name}`;
+  btn.addEventListener('click', () => {
+    centerX = p.x;
+    centerY = p.y;
+    scale = p.s;
+    updateUI();
+    render();
+  });
+  presetContainer.appendChild(btn);
+});
+
+// ─── Input ────────────────────────────────────────────
+canvas.addEventListener('click', e => {
+  if (e.shiftKey) {
+    zoomAt(e.clientX, e.clientY, 0.3); // zoom out
+  } else {
+    zoomAt(e.clientX, e.clientY, 3); // zoom in
+  }
+});
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const factor = e.deltaY < 0 ? 1.5 : 1 / 1.5;
+  zoomAt(e.clientX, e.clientY, factor);
+}, { passive: false });
+
+// Drag to pan
+let dragStart = null;
+let dragCenterStart = null;
+
+canvas.addEventListener('mousedown', e => {
+  if (e.button === 0 && !e.shiftKey) {
+    dragStart = { x: e.clientX, y: e.clientY };
+    dragCenterStart = { x: centerX, y: centerY };
+  }
+});
+
+canvas.addEventListener('mousemove', e => {
+  if (dragStart) {
+    const aspect = W / H;
+    const dx = (e.clientX - dragStart.x) / W * scale;
+    const dy = (e.clientY - dragStart.y) / H * (scale / aspect);
+    centerX = dragCenterStart.x - dx;
+    centerY = dragCenterStart.y - dy;
+    updateUI();
+    render();
+  }
+
+  // Update coordinate display on hover
+  const aspect = W / H;
+  const cr = centerX + (e.clientX / W - 0.5) * scale;
+  const ci = centerY + (e.clientY / H - 0.5) * (scale / aspect);
+  const sign = ci >= 0 ? '+' : '';
+  document.getElementById('coords').textContent =
+    `c = ${cr.toPrecision(8)} ${sign} ${ci.toPrecision(8)}i`;
+});
+
+canvas.addEventListener('mouseup', e => {
+  if (dragStart) {
+    const dx = Math.abs(e.clientX - dragStart.x);
+    const dy = Math.abs(e.clientY - dragStart.y);
+    // If it was a drag (not a click), don't zoom
+    if (dx > 5 || dy > 5) {
+      e.stopPropagation();
+    }
+    dragStart = null;
+    dragCenterStart = null;
+  }
+});
+
+window.addEventListener('keydown', e => {
+  if (e.key >= '1' && e.key <= '7') {
+    const p = presets[parseInt(e.key) - 1];
+    if (p) {
+      centerX = p.x;
+      centerY = p.y;
+      scale = p.s;
+      updateUI();
+      render();
+    }
+  }
+});
+
+window.addEventListener('resize', () => {
+  resize();
+  render();
+});
+
+// ─── Initial render ───────────────────────────────────
+updateUI();
+render();
+</script>
+</body>
+</html>

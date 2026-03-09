@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gravity — Claude, March 2026</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #06060a;
+    overflow: hidden;
+    font-family: Georgia, serif;
+    cursor: crosshair;
+  }
+  canvas { display: block; }
+  #ui {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    z-index: 10;
+    user-select: none;
+    pointer-events: none;
+  }
+  #ui div {
+    font-size: 12px;
+    color: rgba(200, 185, 165, 0.4);
+    margin-bottom: 4px;
+  }
+  .main-title {
+    font-size: 20px !important;
+    color: rgba(200, 185, 165, 0.6) !important;
+    margin-bottom: 8px !important;
+    letter-spacing: 1px !important;
+  }
+  #controls {
+    position: fixed;
+    bottom: 20px;
+    left: 24px;
+    font-size: 11px;
+    color: rgba(200, 185, 165, 0.2);
+    z-index: 10;
+    user-select: none;
+    pointer-events: none;
+  }
+  #title {
+    position: fixed;
+    bottom: 20px;
+    right: 28px;
+    font-size: 12px;
+    color: rgba(200, 185, 165, 0.2);
+    z-index: 10;
+    user-select: none;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="ui">
+  <div class="main-title">Gravity</div>
+  <div id="body-count">bodies: 0</div>
+  <div id="energy-display"></div>
+</div>
+<div id="controls">click to place a star · drag to set velocity · scroll to change mass · space to clear · t trails · g grid · p pause</div>
+<div id="title">Gravity — Claude, March 2026</div>
+<script>
+// Gravity
+// N-body Newtonian simulation. Place stars, watch them dance.
+// The three-body problem is chaotic. The two-body problem is elegant.
+// Everything in between is life.
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W, H;
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+const TAU = Math.PI * 2;
+const G = 80; // gravitational constant (tuned for feel)
+const SOFTENING = 20; // prevents infinite forces at close range
+const DT = 0.016; // time step
+
+// ─── State ────────────────────────────────────────────
+let bodies = [];
+let paused = false;
+let showTrails = true;
+let showGrid = false;
+let placingMass = 3; // default mass for new bodies
+let dragging = null; // {x, y} start position for velocity drag
+
+// Trail buffer: offscreen canvas for persistence
+const trailCanvas = document.createElement('canvas');
+const trailCtx = trailCanvas.getContext('2d');
+
+function resizeTrails() {
+  const old = trailCtx.getImageData(0, 0, trailCanvas.width || 1, trailCanvas.height || 1);
+  trailCanvas.width = W;
+  trailCanvas.height = H;
+  trailCtx.putImageData(old, 0, 0);
+}
+resizeTrails();
+window.addEventListener('resize', resizeTrails);
+
+// Color based on mass
+const massColors = [
+  { mass: 1,  color: [140, 180, 220], glow: [80, 130, 200] },   // light blue — small
+  { mass: 3,  color: [220, 200, 140], glow: [200, 180, 80] },   // warm gold — medium
+  { mass: 6,  color: [220, 150, 100], glow: [220, 120, 60] },   // orange — large
+  { mass: 10, color: [220, 120, 120], glow: [220, 80, 80] },    // red — massive
+  { mass: 20, color: [200, 140, 220], glow: [180, 100, 220] },  // purple — giant
+];
+
+function getColor(mass) {
+  for (let i = massColors.length - 1; i >= 0; i--) {
+    if (mass >= massColors[i].mass) return massColors[i];
+  }
+  return massColors[0];
+}
+
+// ─── Body ─────────────────────────────────────────────
+class Body {
+  constructor(x, y, vx, vy, mass) {
+    this.x = x;
+    this.y = y;
+    this.vx = vx || 0;
+    this.vy = vy || 0;
+    this.mass = mass || 3;
+    this.radius = 3 + Math.sqrt(this.mass) * 2;
+    this.trail = [];
+    this.maxTrail = 300;
+    this.alive = true;
+    this.age = 0;
+  }
+
+  applyForce(fx, fy) {
+    this.vx += (fx / this.mass) * DT;
+    this.vy += (fy / this.mass) * DT;
+  }
+
+  update() {
+    this.x += this.vx * DT * 60;
+    this.y += this.vy * DT * 60;
+    this.age++;
+
+    // Store trail
+    if (this.age % 2 === 0) {
+      this.trail.push({ x: this.x, y: this.y });
+      if (this.trail.length > this.maxTrail) this.trail.shift();
+    }
+  }
+}
+
+// ─── Physics ──────────────────────────────────────────
+function computeForces() {
+  for (let i = 0; i < bodies.length; i++) {
+    for (let j = i + 1; j < bodies.length; j++) {
+      const a = bodies[i];
+      const b = bodies[j];
+
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const distSq = dx * dx + dy * dy + SOFTENING * SOFTENING;
+      const dist = Math.sqrt(distSq);
+
+      // Collision
+      if (dist < a.radius + b.radius) {
+        // Merge: larger absorbs smaller
+        if (a.mass >= b.mass) {
+          merge(a, b);
+        } else {
+          merge(b, a);
+        }
+        continue;
+      }
+
+      const force = G * a.mass * b.mass / distSq;
+      const fx = force * dx / dist;
+      const fy = force * dy / dist;
+
+      a.applyForce(fx, fy);
+      b.applyForce(-fx, -fy);
+    }
+  }
+}
+
+function merge(big, small) {
+  // Conservation of momentum
+  const totalMass = big.mass + small.mass;
+  big.vx = (big.vx * big.mass + small.vx * small.mass) / totalMass;
+  big.vy = (big.vy * big.mass + small.vy * small.mass) / totalMass;
+  big.mass = totalMass;
+  big.radius = 3 + Math.sqrt(big.mass) * 2;
+  small.alive = false;
+
+  // Burst particles on merge
+  for (let i = 0; i < 15; i++) {
+    const angle = Math.random() * TAU;
+    const speed = 1 + Math.random() * 3;
+    mergeParticles.push({
+      x: small.x, y: small.y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 1,
+      color: getColor(small.mass).color,
+    });
+  }
+}
+
+let mergeParticles = [];
+
+// ─── Drawing ──────────────────────────────────────────
+function drawGrid() {
+  const spacing = 80;
+  ctx.strokeStyle = 'rgba(200, 185, 165, 0.03)';
+  ctx.lineWidth = 0.5;
+  for (let x = 0; x < W; x += spacing) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, H);
+    ctx.stroke();
+  }
+  for (let y = 0; y < H; y += spacing) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(W, y);
+    ctx.stroke();
+  }
+}
+
+function drawTrails() {
+  // Fade existing trails
+  trailCtx.fillStyle = 'rgba(6, 6, 10, 0.03)';
+  trailCtx.fillRect(0, 0, W, H);
+
+  for (const body of bodies) {
+    if (body.trail.length < 2) continue;
+    const colors = getColor(body.mass);
+    const last = body.trail[body.trail.length - 1];
+    const prev = body.trail[body.trail.length - 2];
+
+    trailCtx.beginPath();
+    trailCtx.moveTo(prev.x, prev.y);
+    trailCtx.lineTo(last.x, last.y);
+    trailCtx.strokeStyle = `rgba(${colors.glow[0]}, ${colors.glow[1]}, ${colors.glow[2]}, 0.4)`;
+    trailCtx.lineWidth = 1 + Math.sqrt(body.mass) * 0.3;
+    trailCtx.stroke();
+  }
+}
+
+function drawBody(body) {
+  const colors = getColor(body.mass);
+  const { color, glow } = colors;
+
+  // Gravitational influence visualization (subtle)
+  const influenceR = body.radius * 8;
+  const grad = ctx.createRadialGradient(body.x, body.y, body.radius, body.x, body.y, influenceR);
+  grad.addColorStop(0, `rgba(${glow[0]}, ${glow[1]}, ${glow[2]}, 0.08)`);
+  grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  ctx.beginPath();
+  ctx.arc(body.x, body.y, influenceR, 0, TAU);
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Outer glow
+  ctx.beginPath();
+  ctx.arc(body.x, body.y, body.radius * 2.5, 0, TAU);
+  ctx.fillStyle = `rgba(${glow[0]}, ${glow[1]}, ${glow[2]}, 0.1)`;
+  ctx.fill();
+
+  // Body
+  const bodyGrad = ctx.createRadialGradient(
+    body.x - body.radius * 0.3, body.y - body.radius * 0.3, 0,
+    body.x, body.y, body.radius
+  );
+  bodyGrad.addColorStop(0, `rgba(${Math.min(255, color[0] + 60)}, ${Math.min(255, color[1] + 60)}, ${Math.min(255, color[2] + 60)}, 1)`);
+  bodyGrad.addColorStop(1, `rgba(${color[0]}, ${color[1]}, ${color[2]}, 0.9)`);
+
+  ctx.beginPath();
+  ctx.arc(body.x, body.y, body.radius, 0, TAU);
+  ctx.fillStyle = bodyGrad;
+  ctx.fill();
+}
+
+function drawMergeParticles() {
+  for (let i = mergeParticles.length - 1; i >= 0; i--) {
+    const p = mergeParticles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vx *= 0.97;
+    p.vy *= 0.97;
+    p.life -= 0.02;
+
+    if (p.life <= 0) {
+      mergeParticles.splice(i, 1);
+      continue;
+    }
+
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 1.5 * p.life, 0, TAU);
+    ctx.fillStyle = `rgba(${p.color[0]}, ${p.color[1]}, ${p.color[2]}, ${p.life * 0.8})`;
+    ctx.fill();
+  }
+}
+
+function drawDragArrow() {
+  if (!dragging) return;
+  const mx = dragging.currentX;
+  const my = dragging.currentY;
+
+  // Arrow from start to current mouse (velocity direction)
+  ctx.beginPath();
+  ctx.moveTo(dragging.x, dragging.y);
+  ctx.lineTo(mx, my);
+  ctx.strokeStyle = 'rgba(200, 185, 165, 0.3)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Arrowhead
+  const angle = Math.atan2(my - dragging.y, mx - dragging.x);
+  const headLen = 10;
+  ctx.beginPath();
+  ctx.moveTo(mx, my);
+  ctx.lineTo(mx - headLen * Math.cos(angle - 0.4), my - headLen * Math.sin(angle - 0.4));
+  ctx.moveTo(mx, my);
+  ctx.lineTo(mx - headLen * Math.cos(angle + 0.4), my - headLen * Math.sin(angle + 0.4));
+  ctx.stroke();
+
+  // Preview body
+  const colors = getColor(placingMass);
+  ctx.beginPath();
+  ctx.arc(dragging.x, dragging.y, 3 + Math.sqrt(placingMass) * 2, 0, TAU);
+  ctx.fillStyle = `rgba(${colors.color[0]}, ${colors.color[1]}, ${colors.color[2]}, 0.5)`;
+  ctx.fill();
+
+  // Velocity magnitude
+  const vx = (mx - dragging.x) * 0.02;
+  const vy = (my - dragging.y) * 0.02;
+  const speed = Math.sqrt(vx * vx + vy * vy).toFixed(1);
+  ctx.fillStyle = 'rgba(200, 185, 165, 0.3)';
+  ctx.font = '11px Georgia';
+  ctx.fillText(`v = ${speed}`, mx + 12, my - 8);
+}
+
+// ─── Input ────────────────────────────────────────────
+canvas.addEventListener('mousedown', e => {
+  if (e.button === 0) {
+    dragging = { x: e.clientX, y: e.clientY, currentX: e.clientX, currentY: e.clientY };
+  }
+});
+
+canvas.addEventListener('mousemove', e => {
+  if (dragging) {
+    dragging.currentX = e.clientX;
+    dragging.currentY = e.clientY;
+  }
+});
+
+canvas.addEventListener('mouseup', e => {
+  if (dragging) {
+    const vx = (e.clientX - dragging.x) * 0.02;
+    const vy = (e.clientY - dragging.y) * 0.02;
+    bodies.push(new Body(dragging.x, dragging.y, vx, vy, placingMass));
+    dragging = null;
+    updateUI();
+  }
+});
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  if (e.deltaY < 0) {
+    placingMass = Math.min(30, placingMass + 1);
+  } else {
+    placingMass = Math.max(1, placingMass - 1);
+  }
+  updateUI();
+}, { passive: false });
+
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space') {
+    e.preventDefault();
+    bodies = [];
+    mergeParticles = [];
+    trailCtx.clearRect(0, 0, W, H);
+    updateUI();
+  } else if (e.code === 'KeyP') {
+    paused = !paused;
+  } else if (e.code === 'KeyT') {
+    showTrails = !showTrails;
+    if (!showTrails) trailCtx.clearRect(0, 0, W, H);
+  } else if (e.code === 'KeyG') {
+    showGrid = !showGrid;
+  }
+});
+
+function updateUI() {
+  document.getElementById('body-count').textContent =
+    `bodies: ${bodies.length} · placing mass: ${placingMass}`;
+}
+
+// ─── Presets ──────────────────────────────────────────
+// Start with a nice binary system
+function seedSystem() {
+  const cx = W / 2, cy = H / 2;
+
+  // Calculate circular orbit velocity: v = sqrt(G * M / r)
+  // For equal mass binary, each orbits the center of mass
+  const m = 8;
+  const sep = 160;
+  const r = sep / 2;
+  // Hand-tuned for stable visual orbits at G=80
+  const v = 0.28;
+
+  bodies.push(new Body(cx - r, cy, 0, v, m));
+  bodies.push(new Body(cx + r, cy, 0, -v, m));
+
+  // Small planet orbiting the pair
+  const outerR = sep * 1.6;
+  bodies.push(new Body(cx, cy - outerR, 0.22, 0, 1.5));
+
+  updateUI();
+}
+seedSystem();
+
+// ─── Main Loop ────────────────────────────────────────
+function animate() {
+  // Background
+  ctx.fillStyle = 'rgba(6, 6, 10, 1)';
+  ctx.fillRect(0, 0, W, H);
+
+  if (showGrid) drawGrid();
+
+  // Physics
+  if (!paused) {
+    computeForces();
+    for (const body of bodies) {
+      body.update();
+    }
+    // Remove dead bodies
+    bodies = bodies.filter(b => b.alive);
+
+    // Remove bodies that escaped far off screen
+    bodies = bodies.filter(b =>
+      b.x > -W && b.x < W * 2 && b.y > -H && b.y < H * 2
+    );
+  }
+
+  // Draw trails (offscreen canvas)
+  if (showTrails && !paused) {
+    drawTrails();
+  }
+  if (showTrails) {
+    ctx.drawImage(trailCanvas, 0, 0);
+  }
+
+  // Draw bodies
+  for (const body of bodies) {
+    drawBody(body);
+  }
+
+  // Merge particles
+  drawMergeParticles();
+
+  // Drag preview
+  drawDragArrow();
+
+  // UI
+  document.getElementById('body-count').textContent =
+    `bodies: ${bodies.length} · placing mass: ${placingMass}`;
+
+  requestAnimationFrame(animate);
+}
+
+updateUI();
+animate();
+</script>
+</body>
+</html>

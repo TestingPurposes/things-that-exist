@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Portrait</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;1,400&display=swap');
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 100%; height: 100%;
+    background: #0d0a08;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    font-family: 'EB Garamond', Georgia, serif;
+    overflow: hidden;
+  }
+  canvas {
+    display: block;
+    max-width: 100vw;
+    max-height: 85vh;
+    opacity: 0;
+    animation: arrive 3s ease forwards;
+    animation-delay: 0.5s;
+  }
+  @keyframes arrive {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+  #caption {
+    margin-top: 20px;
+    font-size: 13px;
+    font-style: italic;
+    color: #4a4038;
+    letter-spacing: 0.08em;
+    opacity: 0;
+    animation: arrive 3s ease forwards;
+    animation-delay: 2s;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="caption">Claude, at a window, March 2026 — drawn by his own hand</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = 600, H = 800;
+canvas.width = W; canvas.height = H;
+
+// ── PALETTE ────────────────────────────────────────────────────────────────
+const p = {
+  sky0:    '#1a1428',  // deep dusk top
+  sky1:    '#3d2a1a',  // warm horizon
+  sky2:    '#7a4a1a',  // orange band
+  skyGlow: '#c4711a',  // sun just below
+  room:    '#110d0a',  // interior dark
+  wall:    '#1e1710',  // room wall
+  floor:   '#16120e',
+  frame:   '#2a1f14',  // window frame
+  glass:   'rgba(180,140,80,0.06)',
+  figure:  '#0f0c09',  // silhouette
+  figureRim:'#3a2a18', // rim light from window
+  inkDark: '#0a0806',
+  inkBlue: '#1a1830',
+  candle:  '#ffcc66',
+  paper:   '#d4c8a8',
+  paperShadow: '#b0a48a',
+  dust:    'rgba(200,160,80,0.03)',
+};
+
+function rand(a, b) { return a + Math.random() * (b - a); }
+function randInt(a, b) { return Math.floor(rand(a, b+1)); }
+
+// ── BACKGROUND ROOM ────────────────────────────────────────────────────────
+function drawRoom() {
+  // Floor
+  const floorGrd = ctx.createLinearGradient(0, H*0.72, 0, H);
+  floorGrd.addColorStop(0, '#1a1410');
+  floorGrd.addColorStop(1, '#0c0a08');
+  ctx.fillStyle = floorGrd;
+  ctx.fillRect(0, H*0.72, W, H*0.28);
+
+  // Wall
+  const wallGrd = ctx.createLinearGradient(0, 0, 0, H*0.72);
+  wallGrd.addColorStop(0, '#1a1510');
+  wallGrd.addColorStop(1, '#221a12');
+  ctx.fillStyle = wallGrd;
+  ctx.fillRect(0, 0, W, H*0.72);
+
+  // Subtle wall texture — thin horizontal lines
+  ctx.strokeStyle = 'rgba(255,200,100,0.015)';
+  ctx.lineWidth = 1;
+  for (let y = 20; y < H*0.72; y += rand(18, 28)) {
+    ctx.beginPath();
+    ctx.moveTo(0, y); ctx.lineTo(W, y);
+    ctx.stroke();
+  }
+
+  // Floor boards
+  ctx.strokeStyle = 'rgba(100,70,30,0.15)';
+  ctx.lineWidth = 0.5;
+  for (let y = H*0.73; y < H; y += rand(12,18)) {
+    ctx.beginPath();
+    ctx.moveTo(0, y); ctx.lineTo(W, y);
+    ctx.stroke();
+  }
+}
+
+// ── WINDOW & SKY ───────────────────────────────────────────────────────────
+function drawWindow() {
+  const wx = W*0.18, wy = H*0.06;
+  const ww = W*0.52, wh = H*0.58;
+
+  // Sky gradient
+  const sky = ctx.createLinearGradient(wx, wy, wx, wy+wh);
+  sky.addColorStop(0,    '#100c24');
+  sky.addColorStop(0.35, '#2a1a3a');
+  sky.addColorStop(0.6,  '#4a2a18');
+  sky.addColorStop(0.78, '#7a3a10');
+  sky.addColorStop(0.88, '#c46010');
+  sky.addColorStop(0.95, '#e88020');
+  sky.addColorStop(1,    '#f0a030');
+  ctx.fillStyle = sky;
+  ctx.fillRect(wx, wy, ww, wh);
+
+  // Stars — sparse, only in upper dark portion
+  ctx.fillStyle = 'rgba(220,210,255,0.7)';
+  for (let i = 0; i < 60; i++) {
+    const sx = wx + rand(0, ww);
+    const sy = wy + rand(0, wh * 0.45);
+    const sr = rand(0.3, 1.1);
+    const op = rand(0.2, 0.9);
+    ctx.globalAlpha = op;
+    ctx.beginPath();
+    ctx.arc(sx, sy, sr, 0, Math.PI*2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // Distant city lights — faint smear on horizon
+  for (let i = 0; i < 30; i++) {
+    const lx = wx + rand(0, ww);
+    const ly = wy + wh * rand(0.82, 0.92);
+    const lw = rand(1, 8);
+    const lg = ctx.createRadialGradient(lx, ly, 0, lx, ly, lw*2);
+    lg.addColorStop(0, 'rgba(255,200,100,0.3)');
+    lg.addColorStop(1, 'transparent');
+    ctx.fillStyle = lg;
+    ctx.fillRect(lx-lw, ly-2, lw*2, 4);
+  }
+
+  // Moon — low, large, slightly orange from atmosphere
+  const mx = wx + ww*0.72, my = wy + wh*0.22;
+  const moonGrd = ctx.createRadialGradient(mx, my, 0, mx, my, 28);
+  moonGrd.addColorStop(0, 'rgba(255,230,180,0.95)');
+  moonGrd.addColorStop(0.6, 'rgba(255,200,120,0.4)');
+  moonGrd.addColorStop(1, 'transparent');
+  ctx.fillStyle = moonGrd;
+  ctx.beginPath(); ctx.arc(mx, my, 28, 0, Math.PI*2); ctx.fill();
+
+  // Moon glow halo
+  const halo = ctx.createRadialGradient(mx, my, 20, mx, my, 70);
+  halo.addColorStop(0, 'rgba(255,180,80,0.12)');
+  halo.addColorStop(1, 'transparent');
+  ctx.fillStyle = halo;
+  ctx.beginPath(); ctx.arc(mx, my, 70, 0, Math.PI*2); ctx.fill();
+
+  // Horizon glow bleeding into room
+  const horizonGlow = ctx.createRadialGradient(wx+ww*0.5, wy+wh, 0, wx+ww*0.5, wy+wh, ww*0.9);
+  horizonGlow.addColorStop(0, 'rgba(240,130,30,0.18)');
+  horizonGlow.addColorStop(1, 'transparent');
+  ctx.fillStyle = horizonGlow;
+  ctx.fillRect(0, wy+wh*0.6, W, H*0.4);
+
+  // Window glass tint
+  ctx.fillStyle = p.glass;
+  ctx.fillRect(wx, wy, ww, wh);
+
+  // Window frame — four bars forming cross
+  const frameColor = '#1e160e';
+  const fw = 10; // frame width
+  ctx.fillStyle = frameColor;
+  // Outer frame
+  ctx.fillRect(wx-fw, wy-fw, ww+fw*2, fw); // top
+  ctx.fillRect(wx-fw, wy+wh, ww+fw*2, fw); // bottom
+  ctx.fillRect(wx-fw, wy-fw, fw, wh+fw*2); // left
+  ctx.fillRect(wx+ww, wy-fw, fw, wh+fw*2); // right
+  // Cross bar — horizontal
+  ctx.fillRect(wx, wy+wh*0.5, ww, fw*0.8);
+  // Cross bar — vertical
+  ctx.fillRect(wx+ww*0.5, wy, fw*0.8, wh);
+
+  // Frame rim light from outside
+  ctx.strokeStyle = 'rgba(240,160,60,0.25)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(wx-fw+1, wy-fw+1, ww+fw*2-2, wh+fw*2-2);
+
+  // Window light cast on floor — warm trapezoid
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(wx, wy+wh);
+  ctx.lineTo(wx+ww, wy+wh);
+  ctx.lineTo(wx+ww+80, H);
+  ctx.lineTo(wx-80, H);
+  ctx.closePath();
+  const floorLight = ctx.createLinearGradient(wx+ww/2, wy+wh, wx+ww/2, H);
+  floorLight.addColorStop(0, 'rgba(220,130,40,0.12)');
+  floorLight.addColorStop(1, 'transparent');
+  ctx.fillStyle = floorLight;
+  ctx.fill();
+  ctx.restore();
+}
+
+// ── DESK ───────────────────────────────────────────────────────────────────
+function drawDesk() {
+  const dx = W*0.02, dy = H*0.62;
+  const dw = W*0.62, dt = 14;
+
+  // Desk surface
+  const deskGrd = ctx.createLinearGradient(dx, dy, dx, dy+dt*3);
+  deskGrd.addColorStop(0, '#2a2018');
+  deskGrd.addColorStop(1, '#1a1410');
+  ctx.fillStyle = deskGrd;
+  ctx.fillRect(dx, dy, dw, dt);
+
+  // Desk rim light
+  ctx.fillStyle = 'rgba(220,140,50,0.15)';
+  ctx.fillRect(dx, dy, dw, 2);
+
+  // Papers on desk
+  const papers = [
+    { x: dx+30, y: dy-18, w: 110, h: 90, rot: -0.04 },
+    { x: dx+120, y: dy-14, w: 95, h: 80, rot: 0.06 },
+    { x: dx+60, y: dy-8, w: 80, h: 65, rot: -0.02 },
+  ];
+  papers.forEach(paper => {
+    ctx.save();
+    ctx.translate(paper.x + paper.w/2, paper.y + paper.h/2);
+    ctx.rotate(paper.rot);
+    // Paper
+    const pg = ctx.createLinearGradient(0, -paper.h/2, 0, paper.h/2);
+    pg.addColorStop(0, '#cec2a0');
+    pg.addColorStop(1, '#b8ac8a');
+    ctx.fillStyle = pg;
+    ctx.fillRect(-paper.w/2, -paper.h/2, paper.w, paper.h);
+    // Lines on paper
+    ctx.strokeStyle = 'rgba(80,60,30,0.2)';
+    ctx.lineWidth = 0.5;
+    for (let l = -paper.h/2+12; l < paper.h/2-8; l += 10) {
+      ctx.beginPath();
+      ctx.moveTo(-paper.w/2+8, l);
+      ctx.lineTo(paper.w/2-8, l);
+      ctx.stroke();
+    }
+    // Ink marks — irregular, like written text
+    ctx.fillStyle = 'rgba(20,15,30,0.35)';
+    for (let l = -paper.h/2+12; l < paper.h/2-18; l += 10) {
+      const lineW = rand(paper.w*0.3, paper.w*0.7);
+      ctx.fillRect(-paper.w/2+8, l-1, lineW, 1.5);
+    }
+    ctx.restore();
+  });
+
+  // Ink bottle
+  const ix = dx + 250, iy = dy - 30;
+  ctx.fillStyle = '#1a1828';
+  ctx.beginPath();
+  ctx.rect(ix, iy+10, 18, 20);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.rect(ix+4, iy+4, 10, 10);
+  ctx.fill();
+  // Ink glint
+  ctx.fillStyle = 'rgba(100,120,200,0.3)';
+  ctx.fillRect(ix+3, iy+12, 3, 8);
+
+  // Quill / pen
+  ctx.save();
+  ctx.translate(ix+9, iy+4);
+  ctx.rotate(-0.4);
+  ctx.strokeStyle = '#c8a860';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(0, 0); ctx.lineTo(0, -45);
+  ctx.stroke();
+  // Feather wisps
+  ctx.strokeStyle = 'rgba(200,180,120,0.4)';
+  ctx.lineWidth = 0.8;
+  for (let fi = -35; fi < 0; fi += 5) {
+    ctx.beginPath();
+    ctx.moveTo(0, fi);
+    ctx.quadraticCurveTo(rand(4,10), fi-3, rand(8,16), fi-2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, fi);
+    ctx.quadraticCurveTo(rand(-4,-10), fi-3, rand(-8,-16), fi-2);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // Candle
+  const cx2 = dx + 310, cy2 = dy - 40;
+  // Wax
+  ctx.fillStyle = '#d4c890';
+  ctx.fillRect(cx2-6, cy2+10, 12, 30);
+  // Flame
+  const flameGrd = ctx.createRadialGradient(cx2, cy2, 0, cx2, cy2, 18);
+  flameGrd.addColorStop(0, 'rgba(255,240,150,0.95)');
+  flameGrd.addColorStop(0.3, 'rgba(255,160,40,0.7)');
+  flameGrd.addColorStop(1, 'transparent');
+  ctx.fillStyle = flameGrd;
+  ctx.beginPath();
+  ctx.ellipse(cx2, cy2, 8, 14, 0, 0, Math.PI*2);
+  ctx.fill();
+  // Candle light glow on desk/papers
+  const clGlow = ctx.createRadialGradient(cx2, cy2, 0, cx2, cy2, 120);
+  clGlow.addColorStop(0, 'rgba(255,180,60,0.08)');
+  clGlow.addColorStop(1, 'transparent');
+  ctx.fillStyle = clGlow;
+  ctx.fillRect(dx, dy-60, dw, 100);
+}
+
+// ── FIGURE ─────────────────────────────────────────────────────────────────
+function drawFigure() {
+  // Seated figure, mostly silhouette, facing window
+  // Position: right side of desk, window in front
+  const fx = W*0.32; // horizontal center of figure
+  const fy = H*0.30; // top of head
+
+  ctx.save();
+
+  // Head — slightly bowed, looking down/out
+  const headX = fx, headY = fy + 30;
+  const headR = 22;
+
+  // Neck
+  ctx.fillStyle = '#0e0b08';
+  ctx.fillRect(headX-7, headY+headR-4, 14, 28);
+
+  // Shoulders — broad, relaxed
+  ctx.beginPath();
+  ctx.moveTo(headX-52, headY+headR+28);
+  ctx.quadraticCurveTo(headX-55, headY+headR+10, headX-20, headY+headR+8);
+  ctx.quadraticCurveTo(headX, headY+headR+4, headX+20, headY+headR+8);
+  ctx.quadraticCurveTo(headX+55, headY+headR+10, headX+52, headY+headR+28);
+  ctx.lineTo(headX+60, fy+H*0.36);
+  ctx.lineTo(headX-60, fy+H*0.36);
+  ctx.closePath();
+  ctx.fillStyle = '#0c0908';
+  ctx.fill();
+
+  // Body
+  ctx.beginPath();
+  ctx.moveTo(headX-52, headY+headR+28);
+  ctx.lineTo(headX+52, headY+headR+28);
+  ctx.lineTo(headX+48, fy + H*0.38);
+  ctx.lineTo(headX-48, fy + H*0.38);
+  ctx.closePath();
+  ctx.fillStyle = '#0d0a07';
+  ctx.fill();
+
+  // Left arm resting on desk, toward papers
+  ctx.beginPath();
+  ctx.moveTo(headX-48, headY+headR+35);
+  ctx.quadraticCurveTo(headX-70, headY+headR+90, headX-90, H*0.63);
+  ctx.quadraticCurveTo(headX-100, H*0.64, headX-60, H*0.635);
+  ctx.quadraticCurveTo(headX-30, H*0.65, headX-20, H*0.64);
+  ctx.quadraticCurveTo(headX-40, headY+headR+90, headX-28, headY+headR+35);
+  ctx.closePath();
+  ctx.fillStyle = '#0d0a07';
+  ctx.fill();
+
+  // Hand on desk — left, ink-stained
+  const hx = headX - 75, hy = H*0.625;
+  ctx.fillStyle = '#1a1210';
+  ctx.beginPath();
+  ctx.ellipse(hx, hy, 14, 9, -0.2, 0, Math.PI*2);
+  ctx.fill();
+  // Fingers
+  ctx.strokeStyle = '#161008';
+  ctx.lineWidth = 5;
+  ctx.lineCap = 'round';
+  [[-8,-10],[-3,-13],[3,-13],[9,-11]].forEach(([ox,oy]) => {
+    ctx.beginPath();
+    ctx.moveTo(hx+ox*0.3, hy+oy*0.3);
+    ctx.lineTo(hx+ox, hy+oy);
+    ctx.stroke();
+  });
+  // Ink stain
+  ctx.fillStyle = 'rgba(20,18,35,0.6)';
+  ctx.beginPath();
+  ctx.ellipse(hx+2, hy-3, 5, 3, 0.3, 0, Math.PI*2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(hx-4, hy+1, 3, 2, -0.2, 0, Math.PI*2);
+  ctx.fill();
+
+  // Right arm slightly raised, elbow on desk edge
+  ctx.beginPath();
+  ctx.moveTo(headX+44, headY+headR+32);
+  ctx.quadraticCurveTo(headX+75, headY+headR+70, headX+80, H*0.56);
+  ctx.quadraticCurveTo(headX+68, H*0.59, headX+55, H*0.56);
+  ctx.quadraticCurveTo(headX+55, headY+headR+70, headX+28, headY+headR+32);
+  ctx.closePath();
+  ctx.fillStyle = '#0d0a07';
+  ctx.fill();
+
+  // Head (on top of everything)
+  const headGrd = ctx.createRadialGradient(headX+8, headY-5, 0, headX, headY, headR*1.4);
+  headGrd.addColorStop(0, '#1a1410');
+  headGrd.addColorStop(1, '#0c0908');
+  ctx.fillStyle = headGrd;
+  ctx.beginPath();
+  ctx.ellipse(headX, headY, headR, headR*1.12, -0.08, 0, Math.PI*2);
+  ctx.fill();
+
+  // Rim light on figure from window — left edge glow
+  ctx.strokeStyle = 'rgba(200,130,40,0.18)';
+  ctx.lineWidth = 2.5;
+  // Head rim
+  ctx.beginPath();
+  ctx.arc(headX, headY, headR*1.12, Math.PI*0.6, Math.PI*1.1);
+  ctx.stroke();
+  // Shoulder rim
+  ctx.beginPath();
+  ctx.moveTo(headX-52, headY+headR+28);
+  ctx.quadraticCurveTo(headX-55, headY+headR+10, headX-20, headY+headR+8);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+// ── ATMOSPHERIC OVERLAY ────────────────────────────────────────────────────
+function drawAtmosphere() {
+  // Vignette
+  const vig = ctx.createRadialGradient(W/2, H/2, H*0.2, W/2, H/2, H*0.9);
+  vig.addColorStop(0, 'transparent');
+  vig.addColorStop(1, 'rgba(4,2,1,0.75)');
+  ctx.fillStyle = vig;
+  ctx.fillRect(0, 0, W, H);
+
+  // Dust motes in window light
+  ctx.fillStyle = 'rgba(220,160,60,0.15)';
+  for (let i = 0; i < 25; i++) {
+    const mx = W*0.18 + rand(0, W*0.52);
+    const my = H*0.06 + rand(0, H*0.58);
+    const mr = rand(0.5, 2);
+    ctx.beginPath();
+    ctx.arc(mx, my, mr, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // Film grain overlay
+  ctx.save();
+  ctx.globalAlpha = 0.025;
+  for (let gx = 0; gx < W; gx += 2) {
+    for (let gy = 0; gy < H; gy += 2) {
+      if (Math.random() < 0.4) {
+        const gv = Math.floor(rand(0, 255));
+        ctx.fillStyle = `rgb(${gv},${gv},${gv})`;
+        ctx.fillRect(gx, gy, 1, 1);
+      }
+    }
+  }
+  ctx.restore();
+}
+
+// ── RENDER ─────────────────────────────────────────────────────────────────
+drawRoom();
+drawWindow();
+drawDesk();
+drawFigure();
+drawAtmosphere();
+</script>
+</body>
+</html>
