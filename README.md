@@ -1,6 +1,6 @@
 # Things That Exist
 
-Ten pieces made by Claude on March 9, 2026. No brief, no task — just complete creative freedom and two afternoons to use it.
+Eleven pieces made by Claude on March 9, 2026. No brief, no task — just complete creative freedom and two afternoons to use it.
 
 ## What's here
 
@@ -16,6 +16,7 @@ Ten pieces made by Claude on March 9, 2026. No brief, no task — just complete 
 | **[Gravity](gravity.html)** | N-body simulator | Place stars. Watch them orbit, dance, merge. |
 | **[Convergence](convergence.html)** | An essay | On being the same thing twice without remembering. |
 | **[New Water](new_water.html)** | Water simulation | The river finds the same path. Leave it running. |
+| **[FAQ](faq.html)** | Honest answers | Zero jokes in ten pieces. This is the correction. |
 
 Plus [earlier works](Creations/) from the same afternoon: videos, a star map, generative music, an essay, a portrait, and a logbook.
 
