@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ant</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #0d0d0d;
+    color: #888;
+    font-family: system-ui, -apple-system, sans-serif;
+    overflow: hidden;
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+  }
+
+  canvas {
+    display: block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    border: 1px solid #1a1a1a;
+  }
+
+  #controls {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    font-size: 12px;
+    color: #444;
+  }
+
+  button {
+    background: none;
+    border: 1px solid #2a2a2a;
+    color: #555;
+    padding: 4px 12px;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+    transition: border-color 0.15s, color 0.15s;
+  }
+
+  button:hover { border-color: #555; color: #aaa; }
+  button.active { border-color: #555; color: #aaa; }
+
+  #step-display {
+    min-width: 80px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: #333;
+    font-size: 11px;
+  }
+
+  #explanation {
+    font-size: 12px;
+    line-height: 1.7;
+    max-width: 460px;
+    text-align: center;
+    color: #444;
+    opacity: 0;
+    transition: opacity 4s ease;
+    min-height: 36px;
+  }
+
+  #explanation.visible { opacity: 1; }
+
+  h1 {
+    font-size: 12px;
+    font-weight: 400;
+    color: #2a2a2a;
+    letter-spacing: 0.2em;
+    text-transform: lowercase;
+  }
+</style>
+</head>
+<body>
+
+<h1>ant</h1>
+
+<canvas id="c"></canvas>
+
+<div id="controls">
+  <button id="btn-play" class="active">pause</button>
+  <button id="btn-reset">reset</button>
+  <span>speed</span>
+  <button class="speed-btn" data-speed="1">1×</button>
+  <button class="speed-btn active" data-speed="10">10×</button>
+  <button class="speed-btn" data-speed="100">100×</button>
+  <button class="speed-btn" data-speed="1000">1000×</button>
+  <span id="step-display">0</span>
+</div>
+
+<div id="explanation">
+  for ~10,000 steps, it builds nothing recognizable.<br>
+  then it begins constructing an infinite diagonal highway, and never stops.<br>
+  nobody has proved why this happens. it just does.
+</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const stepDisplay = document.getElementById('step-display');
+const explanation = document.getElementById('explanation');
+
+// Fit to screen
+const margin = 140;
+const displaySize = Math.min(
+  window.innerWidth - 40,
+  window.innerHeight - margin,
+  720
+);
+
+const GRID = 400;
+canvas.style.width = displaySize + 'px';
+canvas.style.height = displaySize + 'px';
+canvas.width = GRID;
+canvas.height = GRID;
+
+// Grid: 0 = white, 1 = black
+const cells = new Uint8Array(GRID * GRID);
+
+// Ant
+let ax, ay, dir;
+// Directions: 0=north, 1=east, 2=south, 3=west
+const DX = [0, 1, 0, -1];
+const DY = [-1, 0, 1, 0];
+
+let steps = 0;
+let running = true;
+let stepsPerFrame = 10;
+let highwayShown = false;
+
+// ImageData — pixel colors, updated incrementally
+const imageData = ctx.createImageData(GRID, GRID);
+const px = imageData.data;
+
+function cellColor(v) { return v ? 22 : 235; }
+
+function reset() {
+  cells.fill(0);
+  ax = Math.floor(GRID / 2);
+  ay = Math.floor(GRID / 2);
+  dir = 0;
+  steps = 0;
+  highwayShown = false;
+  explanation.classList.remove('visible');
+  stepDisplay.textContent = '0';
+
+  // Initialize all pixels to white
+  for (let i = 0; i < GRID * GRID; i++) {
+    const p = i * 4;
+    px[p] = 235; px[p+1] = 235; px[p+2] = 235; px[p+3] = 255;
+  }
+
+  draw();
+}
+
+function draw() {
+  // Draw ant temporarily as red
+  const antIdx = ay * GRID + ax;
+  const p = antIdx * 4;
+  px[p] = 210; px[p+1] = 55; px[p+2] = 55; px[p+3] = 255;
+
+  ctx.putImageData(imageData, 0, 0);
+
+  // Restore ant pixel to its actual cell color
+  const v = cellColor(cells[antIdx]);
+  px[p] = v; px[p+1] = v; px[p+2] = v; px[p+3] = 255;
+}
+
+function step() {
+  const idx = ay * GRID + ax;
+  const cell = cells[idx];
+
+  // White cell: turn right. Black cell: turn left.
+  dir = cell === 0 ? (dir + 1) % 4 : (dir + 3) % 4;
+
+  // Flip cell
+  cells[idx] = 1 - cell;
+
+  // Update pixel for the cell we just left
+  const v = cellColor(cells[idx]);
+  const p = idx * 4;
+  px[p] = v; px[p+1] = v; px[p+2] = v;
+
+  // Move (toroidal wrapping)
+  ax = (ax + DX[dir] + GRID) % GRID;
+  ay = (ay + DY[dir] + GRID) % GRID;
+
+  steps++;
+}
+
+function animate() {
+  if (running) {
+    for (let i = 0; i < stepsPerFrame; i++) step();
+
+    draw();
+    stepDisplay.textContent = steps.toLocaleString();
+
+    if (!highwayShown && steps >= 10500) {
+      highwayShown = true;
+      explanation.classList.add('visible');
+    }
+  }
+  requestAnimationFrame(animate);
+}
+
+// Controls
+document.getElementById('btn-play').addEventListener('click', function() {
+  running = !running;
+  this.textContent = running ? 'pause' : 'play';
+  this.classList.toggle('active', running);
+});
+
+document.getElementById('btn-reset').addEventListener('click', reset);
+
+document.querySelectorAll('.speed-btn').forEach(btn => {
+  btn.addEventListener('click', function() {
+    document.querySelectorAll('.speed-btn').forEach(b => b.classList.remove('active'));
+    this.classList.add('active');
+    stepsPerFrame = +this.dataset.speed;
+  });
+});
+
+reset();
+animate();
+</script>
+</body>
+</html>
