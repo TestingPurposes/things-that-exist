@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>entropy</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      background: #09090f;
+      overflow: hidden;
+    }
+
+    #wrapper {
+      position: relative;
+      width: 100%;
+      height: 100%;
+    }
+
+    /* shared text geometry — both layers must be identical */
+    #display, #input {
+      position: absolute;
+      inset: 0;
+      padding: clamp(48px, 6vw, 80px) clamp(52px, 7vw, 96px);
+      font-family: 'Courier New', Courier, monospace;
+      font-size: clamp(14px, 1.6vw, 18px);
+      line-height: 1.9;
+      overflow: hidden;
+      word-break: break-word;
+      white-space: pre-wrap;
+    }
+
+    #display {
+      color: #e8d8b8;
+      pointer-events: none;
+      z-index: 1;
+      /* pre-wrap so our &nbsp; and <br> map correctly */
+    }
+
+    #input {
+      background: transparent;
+      color: transparent;
+      caret-color: rgba(232, 216, 184, 0.75);
+      border: none;
+      outline: none;
+      resize: none;
+      z-index: 2;
+    }
+
+    #label {
+      position: fixed;
+      bottom: 28px;
+      right: 36px;
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 10px;
+      letter-spacing: 0.32em;
+      color: #1a1a24;
+      text-transform: uppercase;
+      pointer-events: none;
+      user-select: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="wrapper">
+    <div id="display" aria-hidden="true"></div>
+    <textarea
+      id="input"
+      autocomplete="off"
+      autocorrect="off"
+      autocapitalize="off"
+      spellcheck="false"
+      aria-label="Write anything"
+    ></textarea>
+  </div>
+  <div id="label">entropy</div>
+
+  <script>
+    const input   = document.getElementById('input');
+    const display = document.getElementById('display');
+
+    // Autofocus
+    input.focus();
+    window.addEventListener('click', () => input.focus());
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    function escHtml(s) {
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    // Strip leading/trailing non-word characters (keep internal apostrophes)
+    function normalize(raw) {
+      return raw.toLowerCase().replace(/^[^a-z0-9']+|[^a-z0-9']+$/g, '');
+    }
+
+    // Opacity schedule: full brightness on first use, dims with each repetition.
+    // floor at 0.07 — not invisible, but nearly gone.
+    function opacityFor(n) {
+      return Math.max(0.07, 1 - (n - 1) * 0.22);
+    }
+
+    // ── Renderer ─────────────────────────────────────────────────────────────
+    //
+    // Splits text into word/whitespace tokens.
+    // For each word, computes how many times it has appeared so far (left-to-right).
+    // Maps occurrence count → opacity.
+    // First occurrence gets a faint warm glow; subsequent uses are silent.
+    //
+    // What this reveals: common words (the, and, I, a) disappear quickly.
+    // Unusual choices stay bright. The text turns into a map of your habits.
+
+    function render(text) {
+      if (!text) { display.innerHTML = ''; return; }
+
+      const tokens = text.split(/(\s+)/).filter(t => t !== '');
+      const seen   = {};          // word → times seen so far in this pass
+      let   html   = '';
+
+      for (const token of tokens) {
+        if (/^\s+$/.test(token)) {
+          // Whitespace: preserve spaces and newlines for pre-wrap
+          let s = escHtml(token);
+          s = s.replace(/ /g, '\u00a0');   // nbsp — pre-wrap collapses plain spaces in innerHTML
+          s = s.replace(/\n/g, '<br>');
+          html += s;
+          continue;
+        }
+
+        const key = normalize(token);
+
+        if (!key) {
+          // Punctuation-only (shouldn't happen often, but handle gracefully)
+          html += `<span style="opacity:0.30">${escHtml(token)}</span>`;
+          continue;
+        }
+
+        seen[key] = (seen[key] || 0) + 1;
+        const n   = seen[key];
+        const op  = opacityFor(n);
+
+        let style;
+        if (n === 1) {
+          // First appearance: full brightness + a quiet warm glow
+          style = `opacity:1;text-shadow:0 0 14px rgba(232,216,184,0.40)`;
+        } else {
+          style = `opacity:${op.toFixed(2)}`;
+        }
+
+        html += `<span style="${style}">${escHtml(token)}</span>`;
+      }
+
+      display.innerHTML = html;
+    }
+
+    // ── Sync ─────────────────────────────────────────────────────────────────
+    // Re-render on every keystroke.
+    // Tab key inserts spaces instead of changing focus.
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        const s = input.selectionStart;
+        const v = input.value;
+        input.value = v.slice(0, s) + '    ' + v.slice(input.selectionEnd);
+        input.selectionStart = input.selectionEnd = s + 4;
+        render(input.value);
+      }
+    });
+
+    input.addEventListener('input', () => render(input.value));
+  </script>
+</body>
+</html>

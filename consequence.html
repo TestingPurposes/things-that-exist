@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>consequence</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      background: #0b0b0f;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      font-family: 'Courier New', monospace;
+    }
+
+    canvas {
+      cursor: crosshair;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+    }
+
+    #title {
+      position: fixed;
+      top: 28px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: #252530;
+      font-size: 11px;
+      letter-spacing: 0.28em;
+      text-transform: uppercase;
+      pointer-events: none;
+    }
+
+    #acts {
+      position: fixed;
+      bottom: 28px;
+      right: 36px;
+      color: #1e1e28;
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      transition: color 1.2s ease;
+      pointer-events: none;
+    }
+
+    #acts.pulse {
+      color: #3a3a50;
+      transition: color 0s;
+    }
+  </style>
+</head>
+<body>
+  <div id="title">consequence</div>
+  <canvas id="c"></canvas>
+  <div id="acts">0</div>
+
+  <script>
+    const W = 256, H = 256;
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    const actsEl = document.getElementById('acts');
+
+    // Fit canvas to viewport
+    function resize() {
+      const s = Math.min(window.innerWidth, window.innerHeight) * 0.86;
+      canvas.style.width  = s + 'px';
+      canvas.style.height = s + 'px';
+    }
+    resize();
+    window.addEventListener('resize', resize);
+    canvas.width  = W;
+    canvas.height = H;
+
+    // Gray-Scott reaction-diffusion
+    // Near the mitosis/soliton boundary — seeds grow and divide in complex ways
+    const Du = 0.2097;
+    const Dv = 0.1050;
+    const f  = 0.0367;   // feed rate
+    const k  = 0.0649;   // kill rate
+    const dt = 1.0;
+
+    let U    = new Float32Array(W * H);
+    let V    = new Float32Array(W * H);
+    let uBuf = new Float32Array(W * H);
+    let vBuf = new Float32Array(W * H);
+
+    let actionCount = 0;
+
+    // Start at near-equilibrium: U ≈ 1, V ≈ 0
+    // Nothing happens until the user acts
+    function init() {
+      for (let i = 0; i < W * H; i++) {
+        U[i] = 0.998 + Math.random() * 0.002;
+        V[i] = Math.random() * 0.001;
+      }
+    }
+
+    // Seed a circular patch: disturbs equilibrium, starts reaction
+    function seed(cx, cy) {
+      const r = 5;
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (dx * dx + dy * dy > r * r) continue;
+          const x = Math.floor(cx + dx);
+          const y = Math.floor(cy + dy);
+          if (x < 0 || x >= W || y < 0 || y >= H) continue;
+          const i = y * W + x;
+          U[i] = 0.50 + (Math.random() - 0.5) * 0.10;
+          V[i] = 0.25 + (Math.random() - 0.5) * 0.10;
+        }
+      }
+    }
+
+    function recordAction() {
+      actionCount++;
+      actsEl.textContent = actionCount;
+      actsEl.classList.remove('pulse');
+      void actsEl.offsetWidth; // force reflow
+      actsEl.classList.add('pulse');
+      setTimeout(() => actsEl.classList.remove('pulse'), 50);
+    }
+
+    // One simulation step using wrapped (toroidal) boundary conditions
+    function step() {
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const i = y * W + x;
+
+          const xL = (x === 0)     ? W - 1 : x - 1;
+          const xR = (x === W - 1) ? 0     : x + 1;
+          const yU = (y === 0)     ? H - 1 : y - 1;
+          const yD = (y === H - 1) ? 0     : y + 1;
+
+          const u = U[i];
+          const v = V[i];
+
+          const lapU = U[y  * W + xL] + U[y  * W + xR]
+                     + U[yU * W + x ] + U[yD * W + x ]
+                     - 4 * u;
+
+          const lapV = V[y  * W + xL] + V[y  * W + xR]
+                     + V[yU * W + x ] + V[yD * W + x ]
+                     - 4 * v;
+
+          const uvv = u * v * v;
+
+          uBuf[i] = Math.min(1, Math.max(0,
+            u + dt * (Du * lapU - uvv + f * (1 - u))
+          ));
+          vBuf[i] = Math.min(1, Math.max(0,
+            v + dt * (Dv * lapV + uvv - (f + k) * v)
+          ));
+        }
+      }
+
+      // Swap buffers
+      const tmp1 = U; U = uBuf; uBuf = tmp1;
+      const tmp2 = V; V = vBuf; vBuf = tmp2;
+    }
+
+    const imgData = ctx.createImageData(W, H);
+    const px = imgData.data;
+
+    function render() {
+      for (let i = 0; i < W * H; i++) {
+        const u = U[i];
+        const v = V[i];
+
+        // u≈1 → at rest → dark
+        // u dropping, v rising → warm amber pattern emerges
+        const a = 1 - u;  // activity: 0 = still, 1 = max
+
+        const r = Math.min(255, Math.floor(11 + a * 210 + v * 60));
+        const g = Math.min(255, Math.floor(11 + a * 140 + v * 25));
+        const b = Math.min(255, Math.floor(15 + a *  55));
+
+        const idx = i * 4;
+        px[idx]     = r;
+        px[idx + 1] = g;
+        px[idx + 2] = b;
+        px[idx + 3] = 255;
+      }
+      ctx.putImageData(imgData, 0, 0);
+    }
+
+    // Interaction
+    let pressing   = false;
+    let lastSeedMs = 0;
+
+    function getPos(e) {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: (e.clientX - rect.left) / rect.width  * W,
+        y: (e.clientY - rect.top)  / rect.height * H
+      };
+    }
+
+    function tryDraw(e) {
+      const now = Date.now();
+      if (now - lastSeedMs < 70) return;
+      lastSeedMs = now;
+      const p = getPos(e);
+      seed(p.x, p.y);
+      recordAction();
+    }
+
+    canvas.addEventListener('mousedown', (e) => {
+      pressing = true;
+      tryDraw(e);
+    });
+    canvas.addEventListener('mousemove', (e) => {
+      if (pressing) tryDraw(e);
+    });
+    window.addEventListener('mouseup',    () => { pressing = false; });
+    canvas.addEventListener('mouseleave', () => { pressing = false; });
+
+    canvas.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      pressing = true;
+      tryDraw(e.touches[0]);
+    }, { passive: false });
+    canvas.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      if (pressing) tryDraw(e.touches[0]);
+    }, { passive: false });
+    window.addEventListener('touchend', () => { pressing = false; });
+
+    // Main loop — 8 steps per frame balances quality and speed
+    const STEPS = 8;
+
+    function loop() {
+      for (let s = 0; s < STEPS; s++) step();
+      render();
+      requestAnimationFrame(loop);
+    }
+
+    init();
+    loop();
+  </script>
+</body>
+</html>
