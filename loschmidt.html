@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Loschmidt's Demon</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #0a0a0f;
+  color: #c8c8d8;
+  font-family: 'Georgia', serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 20px;
+  user-select: none;
+}
+
+h1 {
+  font-size: 1.05rem;
+  font-weight: normal;
+  letter-spacing: 0.18em;
+  color: #606090;
+  text-transform: uppercase;
+}
+
+#container {
+  position: relative;
+}
+
+canvas {
+  display: block;
+  border: 1px solid #181828;
+}
+
+#divider {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 1px;
+  height: 100%;
+  background: linear-gradient(to bottom, transparent, #2a2a50 20%, #2a2a50 80%, transparent);
+  pointer-events: none;
+  transition: opacity 1.5s;
+}
+
+#divider.hidden { opacity: 0; }
+
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: center;
+}
+
+button {
+  background: none;
+  border: 1px solid #252540;
+  color: #606090;
+  font-family: 'Georgia', serif;
+  font-size: 0.78rem;
+  letter-spacing: 0.1em;
+  padding: 7px 18px;
+  cursor: pointer;
+  transition: border-color 0.2s, color 0.2s, background 0.2s;
+  min-width: 80px;
+}
+
+button:hover:not(:disabled) {
+  border-color: #5050a0;
+  color: #a0a0d0;
+}
+
+button.primary {
+  border-color: #4040a0;
+  color: #9090d0;
+}
+
+button:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+
+#entropy-track {
+  width: 480px;
+  height: 70px;
+  position: relative;
+}
+
+#entropy-track canvas {
+  width: 100%;
+  height: 100%;
+  border: none;
+  border-bottom: 1px solid #1e1e38;
+  border-left: 1px solid #1a1a30;
+}
+
+#e-label {
+  position: absolute;
+  right: 0;
+  top: -18px;
+  font-size: 0.65rem;
+  letter-spacing: 0.06em;
+  color: #303060;
+}
+
+#status {
+  font-size: 0.74rem;
+  color: #404070;
+  letter-spacing: 0.07em;
+  height: 1.2rem;
+  text-align: center;
+  max-width: 480px;
+}
+
+#status.lit { color: #8080b8; }
+
+.note {
+  font-size: 0.67rem;
+  color: #222240;
+  max-width: 460px;
+  text-align: center;
+  line-height: 1.9;
+  letter-spacing: 0.04em;
+}
+
+.note em {
+  color: #383870;
+  font-style: normal;
+}
+
+#mode-label {
+  font-size: 0.65rem;
+  letter-spacing: 0.12em;
+  color: #383860;
+  text-transform: uppercase;
+  height: 1rem;
+  text-align: center;
+}
+</style>
+</head>
+<body>
+
+<h1>Loschmidt's Demon</h1>
+
+<div id="container">
+  <canvas id="canvas" width="480" height="300"></canvas>
+  <div id="divider" id="divider"></div>
+</div>
+
+<div id="entropy-track">
+  <canvas id="ecanvas" width="480" height="36"></canvas>
+  <div id="e-label">entropy over time</div>
+</div>
+
+<div id="mode-label"></div>
+
+<div class="row">
+  <button id="btn-reset">reset</button>
+  <button id="btn-run" class="primary">run forward</button>
+  <button id="btn-replay" disabled>replay backward</button>
+  <button id="btn-perturb" disabled>perturbed reversal</button>
+</div>
+
+<div id="status">particles begin in left half — press "run forward"</div>
+
+<div class="note">
+  Boltzmann, 1872: entropy cannot decrease in a closed system.<br>
+  Loschmidt, 1876: but Newton's laws are time-reversible —
+  reverse all velocities and entropy <em>must</em> decrease.<br><br>
+  <em>replay backward</em> uses recorded positions. Loschmidt is right.<br>
+  <em>perturbed reversal</em> adds one small error. Boltzmann wins.
+</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+const ec = document.getElementById('ecanvas');
+ec.height = 70;
+const ectx = ec.getContext('2d');
+const EW = ec.width, EH = ec.height;
+
+const R = 3.5;
+const N = 60;
+const SPEED = 1.8;
+const RECORD_STEPS = 300;
+
+let particles = [];
+let recording = [];       // [{x,y,vx,vy} * N] per frame
+let entropyHistory = [];  // entropy value per frame
+let playIndex = 0;
+let mode = 'idle'; // idle | running | recorded | replaying | perturbing
+let animId = null;
+let frameCount = 0;
+
+// ---- Particle physics ----
+
+function initParticles() {
+  particles = [];
+  for (let i = 0; i < N; i++) {
+    let x, y, tries = 0;
+    do {
+      x = R + 2 + Math.random() * (W / 2 - 2 * R - 4);
+      y = R + 2 + Math.random() * (H - 2 * R - 4);
+      tries++;
+    } while (tries < 500 && particles.some(p => hypot(p.x - x, p.y - y) < 2 * R + 1));
+
+    const a = Math.random() * 2 * Math.PI;
+    particles.push({ x, y, vx: Math.cos(a) * SPEED, vy: Math.sin(a) * SPEED });
+  }
+}
+
+function hypot(dx, dy) { return Math.sqrt(dx * dx + dy * dy); }
+
+function collide(a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const d = hypot(dx, dy);
+  if (d === 0 || d >= 2 * R) return;
+  const ov = 2 * R - d;
+  const nx = dx / d, ny = dy / d;
+  a.x -= nx * ov / 2; a.y -= ny * ov / 2;
+  b.x += nx * ov / 2; b.y += ny * ov / 2;
+  const dv = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny;
+  if (dv <= 0) return;
+  a.vx -= dv * nx; a.vy -= dv * ny;
+  b.vx += dv * nx; b.vy += dv * ny;
+}
+
+function step() {
+  for (const p of particles) {
+    p.x += p.vx; p.y += p.vy;
+    if (p.x < R) { p.x = R; p.vx = Math.abs(p.vx); }
+    if (p.x > W - R) { p.x = W - R; p.vx = -Math.abs(p.vx); }
+    if (p.y < R) { p.y = R; p.vy = Math.abs(p.vy); }
+    if (p.y > H - R) { p.y = H - R; p.vy = -Math.abs(p.vy); }
+  }
+  for (let i = 0; i < N; i++)
+    for (let j = i + 1; j < N; j++)
+      if (hypot(particles[i].x - particles[j].x, particles[i].y - particles[j].y) < 2 * R)
+        collide(particles[i], particles[j]);
+}
+
+function saveFrame() {
+  recording.push(particles.map(p => ({ x: p.x, y: p.y, vx: p.vx, vy: p.vy })));
+}
+
+function loadFrame(idx) {
+  const frame = recording[idx];
+  for (let i = 0; i < N; i++) {
+    particles[i].x = frame[i].x;
+    particles[i].y = frame[i].y;
+    particles[i].vx = frame[i].vx;
+    particles[i].vy = frame[i].vy;
+  }
+}
+
+// ---- Entropy ----
+
+function entropy() {
+  const cols = 8, rows = 6, cells = new Array(cols * rows).fill(0);
+  for (const p of particles) {
+    const ci = Math.min(cols - 1, Math.floor(p.x / W * cols));
+    const ri = Math.min(rows - 1, Math.floor(p.y / H * rows));
+    cells[ri * cols + ci]++;
+  }
+  let S = 0;
+  for (const c of cells) if (c > 0) { const q = c / N; S -= q * Math.log(q); }
+  return S / Math.log(cols * rows);
+}
+
+function leftFraction() {
+  return particles.filter(p => p.x < W / 2).length / N;
+}
+
+// ---- Drawing ----
+
+function drawParticles() {
+  ctx.fillStyle = '#0a0a0f';
+  ctx.fillRect(0, 0, W, H);
+
+  for (const p of particles) {
+    const t = p.x / W; // 0=left, 1=right
+    // Left: warmer purple. Right: cooler blue-purple.
+    const r = Math.round(55 + (1 - t) * 35);
+    const g = Math.round(45 + t * 15);
+    const b = Math.round(150 + (1 - t) * 20);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, R, 0, Math.PI * 2);
+    ctx.fillStyle = `rgb(${r},${g},${b})`;
+    ctx.fill();
+  }
+}
+
+function drawEntropyTrack() {
+  ectx.fillStyle = '#0a0a0f';
+  ectx.fillRect(0, 0, EW, EH);
+
+  const pad = 4;
+  const plotH = EH - pad * 2;
+
+  function eToY(e) { return EH - pad - e * plotH; }
+
+  // Grid lines at 25%, 50%, 75%, 100%
+  ectx.strokeStyle = '#14142a';
+  ectx.lineWidth = 1;
+  for (const level of [0.25, 0.5, 0.75, 1.0]) {
+    const y = eToY(level);
+    ectx.beginPath();
+    ectx.moveTo(0, y); ectx.lineTo(EW, y);
+    ectx.stroke();
+  }
+
+  if (entropyHistory.length < 2) return;
+
+  const total = RECORD_STEPS;
+
+  // Total x-span = 2 * RECORD_STEPS (forward + reversal)
+  const span = total * 2;
+
+  // Forward section (frames 0..RECORD_STEPS)
+  const fwdLen = Math.min(entropyHistory.length, RECORD_STEPS + 1);
+  ectx.beginPath();
+  for (let i = 0; i < fwdLen; i++) {
+    const x = (i / span) * EW;
+    const y = eToY(entropyHistory[i]);
+    if (i === 0) ectx.moveTo(x, y); else ectx.lineTo(x, y);
+  }
+  ectx.strokeStyle = '#5055a0';
+  ectx.lineWidth = 1.5;
+  ectx.stroke();
+
+  // Replay / perturb section (frames RECORD_STEPS..end)
+  if (entropyHistory.length > RECORD_STEPS + 1) {
+    const replayStart = RECORD_STEPS;
+    const replayLen = entropyHistory.length - replayStart;
+    const col = mode === 'perturbing' ? '#a04040' : '#40a060';
+
+    ectx.beginPath();
+    for (let i = 0; i < replayLen; i++) {
+      const x = ((replayStart + i) / span) * EW;
+      const y = eToY(entropyHistory[replayStart + i]);
+      if (i === 0) ectx.moveTo(x, y); else ectx.lineTo(x, y);
+    }
+    ectx.strokeStyle = col;
+    ectx.lineWidth = 1.5;
+    ectx.stroke();
+  }
+
+  // Midpoint marker (reversal point)
+  ectx.beginPath();
+  ectx.moveTo(EW / 2, 0); ectx.lineTo(EW / 2, EH);
+  ectx.strokeStyle = '#252550';
+  ectx.setLineDash([2, 5]); ectx.lineWidth = 1; ectx.stroke();
+  ectx.setLineDash([]);
+
+  // Current cursor
+  const cx = (Math.min(entropyHistory.length - 1, span) / span) * EW;
+  ectx.beginPath();
+  ectx.moveTo(cx, 0); ectx.lineTo(cx, EH);
+  ectx.strokeStyle = '#383870';
+  ectx.lineWidth = 1;
+  ectx.stroke();
+}
+
+// ---- Status / UI ----
+
+function setStatus(msg, lit = false) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = lit ? 'lit' : '';
+}
+
+function setMode(m) {
+  mode = m;
+  document.getElementById('mode-label').textContent =
+    m === 'running' ? '→ forward' :
+    m === 'recorded' ? 'recorded — choose reversal mode' :
+    m === 'replaying' ? '← true reversal' :
+    m === 'perturbing' ? '← perturbed reversal' : '';
+}
+
+function stopLoop() {
+  if (animId) { cancelAnimationFrame(animId); animId = null; }
+}
+
+// ---- Main loops ----
+
+function runForward() {
+  recording = [];
+  entropyHistory = [];
+  frameCount = 0;
+  document.getElementById('divider').classList.add('hidden');
+
+  function tick() {
+    step();
+    saveFrame();
+    const S = entropy();
+    entropyHistory.push(S);
+    frameCount++;
+    drawParticles();
+    drawEntropyTrack();
+
+    const lf = Math.round(leftFraction() * 100);
+    setStatus(`step ${frameCount}/${RECORD_STEPS} · entropy ${Math.round(S * 100)}% · left ${lf}%`);
+
+    if (frameCount < RECORD_STEPS) {
+      animId = requestAnimationFrame(tick);
+    } else {
+      // Done recording
+      setMode('recorded');
+      document.getElementById('btn-replay').disabled = false;
+      document.getElementById('btn-perturb').disabled = false;
+      document.getElementById('btn-run').disabled = true;
+      setStatus('recording complete — pick a reversal mode', true);
+    }
+  }
+  animId = requestAnimationFrame(tick);
+}
+
+function runReplay(perturbed) {
+  // Start from last recorded frame, play backward
+  playIndex = recording.length - 1;
+  setMode(perturbed ? 'perturbing' : 'replaying');
+
+  // Load final frame
+  loadFrame(playIndex);
+
+  // If perturbed: add small kick to one particle's velocity
+  if (perturbed) {
+    const target = Math.floor(Math.random() * N);
+    particles[target].vx += (Math.random() - 0.5) * 0.15;
+    particles[target].vy += (Math.random() - 0.5) * 0.15;
+  }
+
+  function tick() {
+    playIndex--;
+
+    if (playIndex < 0) {
+      const S = entropy();
+      entropyHistory.push(S);
+      drawParticles();
+      drawEntropyTrack();
+      const lf = Math.round(leftFraction() * 100);
+      setStatus(
+        perturbed
+          ? `reversal failed — entropy ${Math.round(S * 100)}% · left ${lf}% (Boltzmann wins)`
+          : `reversal complete — entropy ${Math.round(S * 100)}% · left ${lf}% (Loschmidt wins)`,
+        true
+      );
+      return;
+    }
+
+    if (perturbed) {
+      // Don't use recording — simulate forward (velocities are already reversed in spirit)
+      // Actually for perturbed, we reverse velocities from the last frame and simulate
+      step();
+    } else {
+      // True replay: load recorded frame
+      loadFrame(playIndex);
+    }
+
+    const S = entropy();
+    entropyHistory.push(S);
+    drawParticles();
+    drawEntropyTrack();
+
+    const lf = Math.round(leftFraction() * 100);
+    const stepsLeft = recording.length - 1 - playIndex;
+    setStatus(`replaying step ${stepsLeft}/${recording.length} · entropy ${Math.round(S * 100)}% · left ${lf}%`);
+
+    animId = requestAnimationFrame(tick);
+  }
+
+  animId = requestAnimationFrame(tick);
+}
+
+function setupPerturbed() {
+  // Load last frame, reverse velocities, add perturbation, run forward
+  loadFrame(recording.length - 1);
+  for (const p of particles) { p.vx = -p.vx; p.vy = -p.vy; }
+
+  // Single particle perturbation
+  const target = Math.floor(Math.random() * N);
+  particles[target].vx += (Math.random() - 0.5) * 0.2;
+  particles[target].vy += (Math.random() - 0.5) * 0.2;
+
+  setMode('perturbing');
+  let pertSteps = 0;
+
+  function tick() {
+    step();
+    const S = entropy();
+    entropyHistory.push(S);
+    pertSteps++;
+    drawParticles();
+    drawEntropyTrack();
+
+    const lf = Math.round(leftFraction() * 100);
+    setStatus(`perturbed step ${pertSteps}/${RECORD_STEPS} · entropy ${Math.round(S * 100)}% · left ${lf}%`);
+
+    if (pertSteps < RECORD_STEPS) {
+      animId = requestAnimationFrame(tick);
+    } else {
+      const S2 = entropy();
+      setStatus(
+        `done — entropy ${Math.round(S2 * 100)}% after perturbation · Boltzmann wins`,
+        true
+      );
+    }
+  }
+  animId = requestAnimationFrame(tick);
+}
+
+// ---- Event listeners ----
+
+document.getElementById('btn-reset').addEventListener('click', () => {
+  stopLoop();
+  initParticles();
+  recording = [];
+  entropyHistory = [];
+  frameCount = 0;
+  setMode('idle');
+  document.getElementById('divider').classList.remove('hidden');
+  document.getElementById('btn-run').disabled = false;
+  document.getElementById('btn-run').textContent = 'run forward';
+  document.getElementById('btn-replay').disabled = true;
+  document.getElementById('btn-perturb').disabled = true;
+  drawParticles();
+  drawEntropyTrack();
+  setStatus('particles begin in left half — press "run forward"');
+});
+
+document.getElementById('btn-run').addEventListener('click', () => {
+  if (mode !== 'idle') return;
+  setMode('running');
+  document.getElementById('btn-run').disabled = true;
+  document.getElementById('btn-replay').disabled = true;
+  document.getElementById('btn-perturb').disabled = true;
+  runForward();
+});
+
+document.getElementById('btn-replay').addEventListener('click', () => {
+  if (mode !== 'recorded') return;
+  stopLoop();
+  document.getElementById('btn-replay').disabled = true;
+  document.getElementById('btn-perturb').disabled = true;
+  // True replay: play recording backwards
+  playIndex = recording.length - 1;
+  setMode('replaying');
+
+  let ri = recording.length - 1;
+  function tick() {
+    loadFrame(ri);
+    ri--;
+    const S = entropy();
+    entropyHistory.push(S);
+    drawParticles();
+    drawEntropyTrack();
+    const lf = Math.round(leftFraction() * 100);
+    const stepsBack = recording.length - 1 - ri;
+    setStatus(`rewinding ${stepsBack}/${recording.length} · entropy ${Math.round(S * 100)}% · left ${lf}%`);
+
+    if (ri >= 0) {
+      animId = requestAnimationFrame(tick);
+    } else {
+      const Sf = entropy();
+      setStatus(
+        `reversal complete — entropy ${Math.round(Sf * 100)}% · left ${Math.round(leftFraction() * 100)}% — Loschmidt is correct`,
+        true
+      );
+    }
+  }
+  animId = requestAnimationFrame(tick);
+});
+
+document.getElementById('btn-perturb').addEventListener('click', () => {
+  if (mode !== 'recorded') return;
+  stopLoop();
+  document.getElementById('btn-replay').disabled = true;
+  document.getElementById('btn-perturb').disabled = true;
+  setupPerturbed();
+});
+
+// ---- Init ----
+initParticles();
+drawParticles();
+drawEntropyTrack();
+</script>
+</body>
+</html>
