@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Drift</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #060608; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #start {
+    position: fixed; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    color: #2a2a30;
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 20px;
+    letter-spacing: 8px;
+    cursor: pointer;
+    transition: color 0.5s, opacity 6s;
+    z-index: 1;
+    text-transform: lowercase;
+  }
+  #start:hover { color: #555; }
+  #start.faded { opacity: 0.08; pointer-events: none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="start">drift</div>
+<script>
+const canvas = document.getElementById('c');
+const gfx = canvas.getContext('2d');
+let audioCtx, analyser, freqData;
+let started = false;
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ——— AUDIO ———
+
+document.getElementById('start').addEventListener('click', () => {
+  if (started) return;
+  started = true;
+  document.getElementById('start').classList.add('faded');
+  initAudio();
+});
+
+function initAudio() {
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+  // — Output chain: voices → reverb/dry → compressor → analyser → master → out —
+  const master = audioCtx.createGain();
+  master.gain.value = 0;
+  // Fade in the whole piece over 10 seconds
+  master.gain.setValueAtTime(0, audioCtx.currentTime);
+  master.gain.linearRampToValueAtTime(0.28, audioCtx.currentTime + 10);
+
+  const compressor = audioCtx.createDynamicsCompressor();
+  compressor.threshold.value = -18;
+  compressor.knee.value = 12;
+  compressor.ratio.value = 3;
+  compressor.attack.value = 0.1;
+  compressor.release.value = 0.6;
+
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 4096;
+  analyser.smoothingTimeConstant = 0.85;
+  freqData = new Uint8Array(analyser.frequencyBinCount);
+
+  master.connect(compressor);
+  compressor.connect(analyser);
+  analyser.connect(audioCtx.destination);
+
+  // — Reverb: convolver with shaped impulse response —
+  const reverbSec = 5.5;
+  const irLen = audioCtx.sampleRate * reverbSec;
+  const irBuf = audioCtx.createBuffer(2, irLen, audioCtx.sampleRate);
+
+  for (let ch = 0; ch < 2; ch++) {
+    const d = irBuf.getChannelData(ch);
+    for (let i = 0; i < irLen; i++) {
+      const t = i / audioCtx.sampleRate;
+      d[i] = (Math.random() * 2 - 1) * Math.exp(-t / 1.8);
+    }
+    // Low-pass filter the IR (real rooms absorb highs faster)
+    for (let pass = 0; pass < 4; pass++) {
+      for (let i = 1; i < irLen - 1; i++) {
+        d[i] = d[i - 1] * 0.2 + d[i] * 0.6 + d[i + 1] * 0.2;
+      }
+    }
+  }
+
+  const reverb = audioCtx.createConvolver();
+  reverb.buffer = irBuf;
+
+  const wetGain = audioCtx.createGain();
+  wetGain.gain.value = 0.55;
+  const dryGain = audioCtx.createGain();
+  dryGain.gain.value = 0.45;
+
+  reverb.connect(wetGain);
+  wetGain.connect(master);
+  dryGain.connect(master);
+
+  // — State —
+  let rootFreq = 55; // A1
+  const activeVoices = [];
+
+  // Just intonation chord voicings
+  const CHORDS = [
+    [1, 3/2, 2, 3],                       // open fifth
+    [1, 5/4, 3/2, 2, 5/2],               // major
+    [1, 4/3, 3/2, 2, 8/3],               // sus4
+    [1, 5/4, 3/2, 7/4, 5/2],             // harmonic seventh
+    [1, 6/5, 3/2, 2, 12/5],              // minor
+    [1, 9/8, 5/4, 3/2, 9/4],             // add9
+    [1, 5/4, 3/2, 15/8, 5/2],            // major7
+    [1, 3/2, 2, 5/2, 3],                 // wide open
+    [1, 7/6, 3/2, 7/4, 7/3],             // septimal — the strange one
+  ];
+
+  let chordIdx = -1;
+
+  // — Voice creation —
+  function makeVoice(freq, vol, fadeIn, startDelay) {
+    const t0 = audioCtx.currentTime + startDelay;
+
+    // 2-3 detuned oscillators for warmth
+    const count = freq < 150 ? 2 : 3;
+    const oscNodes = [];
+
+    const voiceGain = audioCtx.createGain();
+    voiceGain.gain.setValueAtTime(0, t0);
+    voiceGain.gain.linearRampToValueAtTime(vol, t0 + fadeIn);
+
+    const pan = audioCtx.createStereoPanner();
+    pan.pan.value = (Math.random() - 0.5) * 1.4;
+
+    voiceGain.connect(pan);
+    pan.connect(reverb);
+    pan.connect(dryGain);
+
+    const waveType = freq < 100 ? 'triangle' : freq < 250 ? 'sine' : 'sine';
+
+    for (let i = 0; i < count; i++) {
+      const osc = audioCtx.createOscillator();
+      osc.type = waveType;
+      osc.frequency.setValueAtTime(freq, t0);
+      // Slight detuning: spread ±1.2 cents
+      osc.detune.value = (i - (count - 1) / 2) * 1.2;
+
+      const g = audioCtx.createGain();
+      g.gain.value = 1 / count;
+      osc.connect(g);
+      g.connect(voiceGain);
+      osc.start(t0);
+      oscNodes.push(osc);
+    }
+
+    // Very slow pitch drift
+    const driftLfo = audioCtx.createOscillator();
+    const driftAmt = audioCtx.createGain();
+    driftLfo.frequency.value = 0.015 + Math.random() * 0.035;
+    driftAmt.gain.value = freq * 0.0006;
+    driftLfo.connect(driftAmt);
+    for (const osc of oscNodes) driftAmt.connect(osc.frequency);
+    driftLfo.start(t0);
+
+    // Slow pan drift
+    const panLfo = audioCtx.createOscillator();
+    const panAmt = audioCtx.createGain();
+    panLfo.frequency.value = 0.008 + Math.random() * 0.015;
+    panAmt.gain.value = 0.25;
+    panLfo.connect(panAmt);
+    panAmt.connect(pan.pan);
+    panLfo.start(t0);
+
+    const voice = {
+      oscNodes, voiceGain, pan, driftLfo, driftAmt, panLfo, panAmt,
+      freq, vol, alive: true
+    };
+    activeVoices.push(voice);
+    return voice;
+  }
+
+  function killVoice(v, fadeOut) {
+    if (!v.alive) return;
+    v.alive = false;
+    const now = audioCtx.currentTime;
+    v.voiceGain.gain.cancelScheduledValues(now);
+    v.voiceGain.gain.setValueAtTime(v.voiceGain.gain.value, now);
+    v.voiceGain.gain.linearRampToValueAtTime(0, now + fadeOut);
+
+    setTimeout(() => {
+      v.oscNodes.forEach(o => { try { o.stop(); } catch (_) {} });
+      try { v.driftLfo.stop(); } catch (_) {}
+      try { v.panLfo.stop(); } catch (_) {}
+    }, (fadeOut + 1) * 1000);
+  }
+
+  // — Sub-bass drone —
+  const droneOsc = audioCtx.createOscillator();
+  droneOsc.type = 'triangle';
+  droneOsc.frequency.value = rootFreq / 2;
+  const droneGain = audioCtx.createGain();
+  droneGain.gain.value = 0;
+  droneGain.gain.setValueAtTime(0, audioCtx.currentTime);
+  droneGain.gain.linearRampToValueAtTime(0.055, audioCtx.currentTime + 12);
+
+  // Drone breathes
+  const breathLfo = audioCtx.createOscillator();
+  const breathAmt = audioCtx.createGain();
+  breathLfo.frequency.value = 0.012;
+  breathAmt.gain.value = 0.025;
+  breathLfo.connect(breathAmt);
+  breathAmt.connect(droneGain.gain);
+
+  droneOsc.connect(droneGain);
+  droneGain.connect(dryGain);
+  droneGain.connect(reverb);
+  droneOsc.start();
+  breathLfo.start();
+
+  // — Chord transitions —
+  function transition() {
+    // Fade out current voices (staggered)
+    for (const v of activeVoices) {
+      if (v.alive) {
+        killVoice(v, 6 + Math.random() * 8);
+      }
+    }
+    // Clean up dead entries
+    while (activeVoices.length > 40) activeVoices.shift();
+
+    // New chord (different from last)
+    let next;
+    do { next = Math.floor(Math.random() * CHORDS.length); } while (next === chordIdx);
+    chordIdx = next;
+
+    // Maybe shift root (35% chance)
+    if (Math.random() < 0.35) {
+      const shifts = [3/4, 4/3, 3/2, 2/3, 5/4, 4/5, 9/8, 8/9, 6/5, 5/6];
+      rootFreq *= shifts[Math.floor(Math.random() * shifts.length)];
+      // Keep in range A1-ish
+      while (rootFreq < 38) rootFreq *= 2;
+      while (rootFreq > 88) rootFreq /= 2;
+
+      // Update drone
+      droneOsc.frequency.setValueAtTime(droneOsc.frequency.value, audioCtx.currentTime);
+      droneOsc.frequency.linearRampToValueAtTime(rootFreq / 2, audioCtx.currentTime + 8);
+    }
+
+    // Build new voices
+    const chord = CHORDS[chordIdx];
+    for (const ratio of chord) {
+      const freq = rootFreq * ratio;
+      if (freq > 1400) continue;
+
+      // Volume inversely proportional to frequency (higher = quieter)
+      const vol = freq < 100 ? 0.09 : freq < 200 ? 0.065 : freq < 400 ? 0.045 : 0.025;
+      const fadeIn = 5 + Math.random() * 10;
+      const delay = Math.random() * 10;
+
+      makeVoice(freq, vol, fadeIn, delay);
+
+      // Occasional octave doubling (quiet)
+      if (Math.random() < 0.2 && freq * 2 < 1400) {
+        makeVoice(freq * 2, vol * 0.3, fadeIn + 3, delay + Math.random() * 6);
+      }
+    }
+
+    // Occasional high harmonic (sparkle)
+    if (Math.random() < 0.35) {
+      const harmonic = Math.random() < 0.5 ? 6 : 8;
+      const sparkFreq = rootFreq * harmonic;
+      if (sparkFreq < 1800) {
+        const sparkDelay = 12 + Math.random() * 18;
+        const sv = makeVoice(sparkFreq, 0.008, 5, sparkDelay);
+        // Auto-fade sparkle
+        setTimeout(() => {
+          if (sv.alive) killVoice(sv, 8);
+        }, (sparkDelay + 12 + Math.random() * 10) * 1000);
+      }
+    }
+
+    // Schedule next transition
+    const wait = 50000 + Math.random() * 70000; // 50-120 seconds
+    setTimeout(transition, wait);
+  }
+
+  // First chord after a brief pause
+  setTimeout(transition, 2000);
+}
+
+// ——— VISUAL ———
+// Spectrogram-like visualization: frequency → y (log scale), amplitude → brightness
+// Very subtle, almost not there
+
+function draw() {
+  requestAnimationFrame(draw);
+
+  const W = canvas.width;
+  const H = canvas.height;
+
+  // Slow fade of previous frame — creates trailing glow
+  gfx.fillStyle = 'rgba(6, 6, 8, 0.06)';
+  gfx.fillRect(0, 0, W, H);
+
+  if (!analyser || !freqData) return;
+  analyser.getByteFrequencyData(freqData);
+
+  const binCount = analyser.frequencyBinCount;
+  const nyquist = audioCtx.sampleRate / 2;
+  const minF = 25, maxF = 2000;
+  const logMin = Math.log(minF), logMax = Math.log(maxF);
+
+  for (let i = 1; i < binCount; i++) {
+    const amp = freqData[i] / 255;
+    if (amp < 0.015) continue;
+
+    const freq = (i / binCount) * nyquist;
+    if (freq < minF || freq > maxF) continue;
+
+    const logF = Math.log(freq);
+    const yNorm = (logF - logMin) / (logMax - logMin);
+    const y = H * (1 - yNorm);
+
+    // Color: amber-warm below, cooler above
+    const r = Math.floor(160 + 60 * (1 - yNorm));
+    const g = Math.floor(120 + 50 * yNorm);
+    const b = Math.floor(100 + 80 * yNorm);
+    const a = amp * amp * 0.35; // squared for softer falloff
+
+    gfx.fillStyle = `rgba(${r}, ${g}, ${b}, ${a})`;
+
+    // Thin horizontal band
+    const bandH = Math.max(1.5, H * 0.003);
+    gfx.fillRect(0, y - bandH / 2, W, bandH);
+  }
+}
+
+draw();
+</script>
+</body>
+</html>

@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pulse</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0c0c0e;
+    color: #aaa;
+    font-family: 'Courier New', monospace;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    padding: 40px 20px;
+    user-select: none;
+  }
+  h1 {
+    font-size: 16px;
+    letter-spacing: 8px;
+    color: #333;
+    margin-bottom: 30px;
+    font-weight: normal;
+    text-transform: lowercase;
+  }
+  #controls {
+    display: flex;
+    gap: 24px;
+    align-items: center;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .ctrl-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #555;
+  }
+  .ctrl-group input[type="range"] {
+    width: 80px;
+    accent-color: #666;
+  }
+  .ctrl-group .val {
+    color: #888;
+    width: 32px;
+    text-align: center;
+  }
+  button {
+    padding: 6px 16px;
+    background: #1a1a1e;
+    border: 1px solid #333;
+    border-radius: 3px;
+    color: #888;
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    letter-spacing: 1px;
+  }
+  button:hover { border-color: #555; color: #bbb; }
+  button.active { border-color: #7a7; color: #9c9; }
+
+  #grid {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    height: 36px;
+  }
+  .row-label {
+    width: 44px;
+    font-size: 11px;
+    letter-spacing: 1px;
+    text-align: right;
+    padding-right: 6px;
+    color: #555;
+  }
+  .row-beats {
+    width: 60px;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .row-beats input {
+    width: 40px;
+    accent-color: #666;
+  }
+  .row-beats .bval {
+    font-size: 11px;
+    color: #666;
+    width: 14px;
+    text-align: center;
+  }
+  .row-rot {
+    width: 50px;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .row-rot input {
+    width: 30px;
+    accent-color: #555;
+  }
+  .row-rot .rval {
+    font-size: 10px;
+    color: #555;
+    width: 12px;
+    text-align: center;
+  }
+  .step {
+    width: 36px;
+    height: 36px;
+    border: 1px solid #222;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background 0.08s, border-color 0.08s;
+    position: relative;
+  }
+  .step.on {
+    border-color: #444;
+  }
+  .step.playhead {
+    border-color: #666 !important;
+  }
+  .step.on.playhead.triggered {
+    box-shadow: 0 0 12px 2px var(--glow);
+  }
+  /* Beat grouping: subtle separator every 4 steps */
+  .step:nth-child(4n+3) { /* +3 because label and inputs are before steps... actually let me use a class */
+  }
+  .step.bar-start {
+    margin-left: 4px;
+  }
+
+  #presets {
+    margin-top: 20px;
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  #info {
+    margin-top: 24px;
+    color: #333;
+    font-size: 11px;
+    letter-spacing: 1px;
+    text-align: center;
+    max-width: 600px;
+    line-height: 1.6;
+  }
+</style>
+</head>
+<body>
+<h1>pulse</h1>
+
+<div id="controls">
+  <button id="playBtn" onclick="togglePlay()">play</button>
+  <div class="ctrl-group">
+    bpm <input type="range" id="bpmSlider" min="60" max="200" value="120">
+    <span class="val" id="bpmVal">120</span>
+  </div>
+  <div class="ctrl-group">
+    swing <input type="range" id="swingSlider" min="50" max="75" value="50">
+    <span class="val" id="swingVal">50%</span>
+  </div>
+  <button onclick="randomize()">random</button>
+  <button onclick="clearAll()">clear</button>
+</div>
+
+<div id="grid"></div>
+
+<div id="presets">
+  <button onclick="loadPreset('son')">son clave</button>
+  <button onclick="loadPreset('bossa')">bossa nova</button>
+  <button onclick="loadPreset('afro')">afrobeat</button>
+  <button onclick="loadPreset('funk')">funk</button>
+  <button onclick="loadPreset('minimal')">minimal</button>
+</div>
+
+<div id="info">
+  euclidean rhythms — distribute beats as evenly as possible.<br>
+  3 in 8 = tresillo. 5 in 8 = cinquillo. 7 in 12 = west african bell.<br>
+  click cells to override. adjust beats and rotation per row.
+</div>
+
+<script>
+// ——— CONFIG ———
+const STEPS = 16;
+const INSTRUMENTS = [
+  { name: 'kick', color: '#c45', beats: 4, rot: 0 },
+  { name: 'snare', color: '#c84', beats: 2, rot: 4 },
+  { name: 'hat', color: '#4a8', beats: 0, rot: 0 },
+  { name: 'oh', color: '#48a', beats: 0, rot: 0 },
+  { name: 'rim', color: '#84a', beats: 0, rot: 0 },
+  { name: 'bell', color: '#a84', beats: 0, rot: 0 },
+];
+
+let bpm = 120;
+let swing = 50;
+let playing = false;
+let currentStep = -1;
+let audioCtx = null;
+
+// Each instrument's pattern: either from Euclidean or manual overrides
+// manualOverride[row] = null means use Euclidean, otherwise it's the pattern array
+let manualOverride = INSTRUMENTS.map(() => null);
+
+// ——— BJORKLUND ———
+function bjorklund(beats, steps) {
+  if (beats === 0) return Array(steps).fill(0);
+  if (beats >= steps) return Array(steps).fill(1);
+
+  let front = Array.from({ length: beats }, () => [1]);
+  let back = Array.from({ length: steps - beats }, () => [0]);
+
+  while (back.length > 1) {
+    const take = Math.min(front.length, back.length);
+    const merged = [];
+    for (let i = 0; i < take; i++) {
+      merged.push([...front[i], ...back[i]]);
+    }
+    const leftF = front.slice(take);
+    const leftB = back.slice(take);
+    front = merged;
+    back = leftF.length > 0 ? leftF : leftB;
+  }
+  return [...front, ...back].flat();
+}
+
+function getPattern(rowIdx) {
+  if (manualOverride[rowIdx]) return manualOverride[rowIdx];
+  const inst = INSTRUMENTS[rowIdx];
+  const base = bjorklund(inst.beats, STEPS);
+  // Apply rotation
+  const rot = inst.rot % STEPS;
+  return [...base.slice(rot), ...base.slice(0, rot)];
+}
+
+// ——— SOUND SYNTHESIS ———
+function ensureAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+function playSound(name, time) {
+  const ctx = audioCtx;
+
+  switch (name) {
+    case 'kick': {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(160, time);
+      osc.frequency.exponentialRampToValueAtTime(38, time + 0.12);
+      gain.gain.setValueAtTime(0.9, time);
+      gain.gain.exponentialRampToValueAtTime(0.001, time + 0.3);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(time);
+      osc.stop(time + 0.3);
+      // Sub thump
+      const sub = ctx.createOscillator();
+      const subG = ctx.createGain();
+      sub.type = 'sine';
+      sub.frequency.value = 45;
+      subG.gain.setValueAtTime(0.5, time);
+      subG.gain.exponentialRampToValueAtTime(0.001, time + 0.15);
+      sub.connect(subG);
+      subG.connect(ctx.destination);
+      sub.start(time);
+      sub.stop(time + 0.15);
+      break;
+    }
+    case 'snare': {
+      // Noise
+      const bufLen = ctx.sampleRate * 0.12;
+      const buf = ctx.createBuffer(1, bufLen, ctx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < bufLen; i++) data[i] = Math.random() * 2 - 1;
+      const noise = ctx.createBufferSource();
+      noise.buffer = buf;
+      const nFilt = ctx.createBiquadFilter();
+      nFilt.type = 'bandpass';
+      nFilt.frequency.value = 3500;
+      nFilt.Q.value = 0.8;
+      const nGain = ctx.createGain();
+      nGain.gain.setValueAtTime(0.6, time);
+      nGain.gain.exponentialRampToValueAtTime(0.001, time + 0.1);
+      noise.connect(nFilt);
+      nFilt.connect(nGain);
+      nGain.connect(ctx.destination);
+      noise.start(time);
+      noise.stop(time + 0.12);
+      // Body
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = 185;
+      g.gain.setValueAtTime(0.35, time);
+      g.gain.exponentialRampToValueAtTime(0.001, time + 0.07);
+      osc.connect(g);
+      g.connect(ctx.destination);
+      osc.start(time);
+      osc.stop(time + 0.08);
+      break;
+    }
+    case 'hat': {
+      const bufLen = ctx.sampleRate * 0.04;
+      const buf = ctx.createBuffer(1, bufLen, ctx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < bufLen; i++) data[i] = Math.random() * 2 - 1;
+      const noise = ctx.createBufferSource();
+      noise.buffer = buf;
+      const filt = ctx.createBiquadFilter();
+      filt.type = 'highpass';
+      filt.frequency.value = 7000;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.22, time);
+      g.gain.exponentialRampToValueAtTime(0.001, time + 0.04);
+      noise.connect(filt);
+      filt.connect(g);
+      g.connect(ctx.destination);
+      noise.start(time);
+      noise.stop(time + 0.05);
+      break;
+    }
+    case 'oh': {
+      const bufLen = ctx.sampleRate * 0.2;
+      const buf = ctx.createBuffer(1, bufLen, ctx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < bufLen; i++) data[i] = Math.random() * 2 - 1;
+      const noise = ctx.createBufferSource();
+      noise.buffer = buf;
+      const filt = ctx.createBiquadFilter();
+      filt.type = 'highpass';
+      filt.frequency.value = 6000;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.18, time);
+      g.gain.exponentialRampToValueAtTime(0.001, time + 0.18);
+      noise.connect(filt);
+      filt.connect(g);
+      g.connect(ctx.destination);
+      noise.start(time);
+      noise.stop(time + 0.2);
+      break;
+    }
+    case 'rim': {
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.value = 830;
+      g.gain.setValueAtTime(0.35, time);
+      g.gain.exponentialRampToValueAtTime(0.001, time + 0.025);
+      osc.connect(g);
+      g.connect(ctx.destination);
+      osc.start(time);
+      osc.stop(time + 0.03);
+      break;
+    }
+    case 'bell': {
+      // Two non-harmonic oscillators = metallic tone
+      const f1 = 587, f2 = 845;
+      for (const f of [f1, f2]) {
+        const osc = ctx.createOscillator();
+        const g = ctx.createGain();
+        osc.type = 'square';
+        osc.frequency.value = f;
+        g.gain.setValueAtTime(0.12, time);
+        g.gain.exponentialRampToValueAtTime(0.001, time + 0.06);
+        osc.connect(g);
+        g.connect(ctx.destination);
+        osc.start(time);
+        osc.stop(time + 0.07);
+      }
+      break;
+    }
+  }
+}
+
+// ——— SCHEDULER (sample-accurate) ———
+const LOOKAHEAD = 0.1;
+const SCHED_MS = 25;
+let nextNoteTime = 0;
+let schedStep = 0;
+let schedTimer = null;
+
+function startScheduler() {
+  schedStep = 0;
+  nextNoteTime = audioCtx.currentTime + 0.05;
+  schedTimer = setInterval(schedule, SCHED_MS);
+}
+
+function stopScheduler() {
+  if (schedTimer) clearInterval(schedTimer);
+  schedTimer = null;
+  currentStep = -1;
+  updatePlayhead();
+}
+
+function schedule() {
+  while (nextNoteTime < audioCtx.currentTime + LOOKAHEAD) {
+    // Play active instruments at this step
+    for (let r = 0; r < INSTRUMENTS.length; r++) {
+      const pattern = getPattern(r);
+      if (pattern[schedStep]) {
+        playSound(INSTRUMENTS[r].name, nextNoteTime);
+      }
+    }
+
+    // Visual update (approximate — will be refined by rAF)
+    currentStep = schedStep;
+
+    // Advance
+    const secPerBeat = 60 / bpm;
+    const secPerStep = secPerBeat / 4;
+
+    // Swing: delay odd steps
+    let stepDuration = secPerStep;
+    if (schedStep % 2 === 0) {
+      // Even step: shortened or lengthened depending on swing
+      stepDuration = secPerStep * (swing / 50);
+    } else {
+      stepDuration = secPerStep * (2 - swing / 50);
+    }
+
+    nextNoteTime += stepDuration;
+    schedStep = (schedStep + 1) % STEPS;
+  }
+}
+
+// ——— UI ———
+const gridEl = document.getElementById('grid');
+
+function buildGrid() {
+  gridEl.innerHTML = '';
+  INSTRUMENTS.forEach((inst, rowIdx) => {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.dataset.row = rowIdx;
+
+    // Label
+    const label = document.createElement('div');
+    label.className = 'row-label';
+    label.textContent = inst.name;
+    label.style.color = inst.color;
+    row.appendChild(label);
+
+    // Beats slider
+    const beats = document.createElement('div');
+    beats.className = 'row-beats';
+    const bSlider = document.createElement('input');
+    bSlider.type = 'range';
+    bSlider.min = 0;
+    bSlider.max = STEPS;
+    bSlider.value = inst.beats;
+    const bVal = document.createElement('span');
+    bVal.className = 'bval';
+    bVal.textContent = inst.beats;
+    bSlider.addEventListener('input', () => {
+      inst.beats = parseInt(bSlider.value);
+      bVal.textContent = inst.beats;
+      manualOverride[rowIdx] = null; // reset manual
+      updateStepDisplay(rowIdx);
+    });
+    beats.appendChild(bSlider);
+    beats.appendChild(bVal);
+    row.appendChild(beats);
+
+    // Rotation slider
+    const rot = document.createElement('div');
+    rot.className = 'row-rot';
+    const rSlider = document.createElement('input');
+    rSlider.type = 'range';
+    rSlider.min = 0;
+    rSlider.max = STEPS - 1;
+    rSlider.value = inst.rot;
+    rSlider.id = `rot-${rowIdx}`;
+    const rVal = document.createElement('span');
+    rVal.className = 'rval';
+    rVal.textContent = inst.rot;
+    rSlider.addEventListener('input', () => {
+      inst.rot = parseInt(rSlider.value);
+      rVal.textContent = inst.rot;
+      if (!manualOverride[rowIdx]) updateStepDisplay(rowIdx);
+    });
+    rot.appendChild(rSlider);
+    rot.appendChild(rVal);
+    row.appendChild(rot);
+
+    // Steps
+    for (let s = 0; s < STEPS; s++) {
+      const step = document.createElement('div');
+      step.className = 'step' + (s % 4 === 0 && s > 0 ? ' bar-start' : '');
+      step.dataset.row = rowIdx;
+      step.dataset.step = s;
+      step.addEventListener('click', () => toggleStep(rowIdx, s));
+      row.appendChild(step);
+    }
+
+    gridEl.appendChild(row);
+  });
+
+  // Initial display
+  INSTRUMENTS.forEach((_, i) => updateStepDisplay(i));
+}
+
+function updateStepDisplay(rowIdx) {
+  const pattern = getPattern(rowIdx);
+  const row = gridEl.children[rowIdx];
+  const steps = row.querySelectorAll('.step');
+  const color = INSTRUMENTS[rowIdx].color;
+
+  steps.forEach((el, i) => {
+    if (pattern[i]) {
+      el.classList.add('on');
+      el.style.background = color + '33';
+      el.style.setProperty('--glow', color);
+    } else {
+      el.classList.remove('on');
+      el.style.background = '';
+    }
+  });
+}
+
+function toggleStep(rowIdx, stepIdx) {
+  // Switch to manual override for this row
+  if (!manualOverride[rowIdx]) {
+    manualOverride[rowIdx] = [...getPattern(rowIdx)];
+  }
+  manualOverride[rowIdx][stepIdx] = manualOverride[rowIdx][stepIdx] ? 0 : 1;
+  updateStepDisplay(rowIdx);
+}
+
+function updatePlayhead() {
+  document.querySelectorAll('.step').forEach(el => {
+    el.classList.remove('playhead', 'triggered');
+  });
+  if (currentStep < 0) return;
+
+  document.querySelectorAll(`.step[data-step="${currentStep}"]`).forEach(el => {
+    el.classList.add('playhead');
+    if (el.classList.contains('on')) el.classList.add('triggered');
+  });
+}
+
+// ——— CONTROLS ———
+function togglePlay() {
+  ensureAudio();
+  playing = !playing;
+  document.getElementById('playBtn').textContent = playing ? 'stop' : 'play';
+  document.getElementById('playBtn').classList.toggle('active', playing);
+  if (playing) {
+    startScheduler();
+  } else {
+    stopScheduler();
+  }
+}
+
+document.getElementById('bpmSlider').addEventListener('input', (e) => {
+  bpm = parseInt(e.target.value);
+  document.getElementById('bpmVal').textContent = bpm;
+});
+
+document.getElementById('swingSlider').addEventListener('input', (e) => {
+  swing = parseInt(e.target.value);
+  document.getElementById('swingVal').textContent = swing + '%';
+});
+
+function randomize() {
+  INSTRUMENTS.forEach((inst, i) => {
+    inst.beats = Math.floor(Math.random() * 9);
+    inst.rot = Math.floor(Math.random() * STEPS);
+    manualOverride[i] = null;
+    // Update sliders
+    const row = gridEl.children[i];
+    const bSlider = row.querySelector('.row-beats input');
+    const bVal = row.querySelector('.bval');
+    const rSlider = row.querySelector('.row-rot input');
+    const rVal = row.querySelector('.rval');
+    bSlider.value = inst.beats;
+    bVal.textContent = inst.beats;
+    rSlider.value = inst.rot;
+    rVal.textContent = inst.rot;
+    updateStepDisplay(i);
+  });
+}
+
+function clearAll() {
+  INSTRUMENTS.forEach((inst, i) => {
+    inst.beats = 0;
+    inst.rot = 0;
+    manualOverride[i] = null;
+    const row = gridEl.children[i];
+    row.querySelector('.row-beats input').value = 0;
+    row.querySelector('.bval').textContent = 0;
+    row.querySelector('.row-rot input').value = 0;
+    row.querySelector('.rval').textContent = 0;
+    updateStepDisplay(i);
+  });
+}
+
+// ——— PRESETS ———
+function loadPreset(name) {
+  clearAll();
+  const presets = {
+    'son': [
+      { row: 0, beats: 4, rot: 0 },   // kick: 4 in 16
+      { row: 1, beats: 2, rot: 4 },   // snare: backbeat
+      { row: 2, beats: 8, rot: 0 },   // hat: 8ths
+      { row: 4, beats: 3, rot: 0 },   // rim: son clave 3-side
+      { row: 5, beats: 2, rot: 0 },   // bell: son clave 2-side offset
+    ],
+    'bossa': [
+      { row: 0, beats: 3, rot: 0 },
+      { row: 1, beats: 2, rot: 6 },
+      { row: 2, beats: 5, rot: 0 },
+      { row: 4, beats: 5, rot: 3 },
+    ],
+    'afro': [
+      { row: 0, beats: 4, rot: 0 },
+      { row: 1, beats: 3, rot: 2 },
+      { row: 2, beats: 7, rot: 0 },
+      { row: 5, beats: 7, rot: 3 },
+    ],
+    'funk': [
+      { row: 0, beats: 5, rot: 0 },
+      { row: 1, beats: 3, rot: 4 },
+      { row: 2, beats: 9, rot: 0 },
+      { row: 3, beats: 2, rot: 6 },
+      { row: 4, beats: 4, rot: 2 },
+    ],
+    'minimal': [
+      { row: 0, beats: 4, rot: 0 },
+      { row: 2, beats: 4, rot: 2 },
+      { row: 4, beats: 3, rot: 0 },
+    ],
+  };
+
+  const p = presets[name];
+  if (!p) return;
+  for (const { row, beats, rot } of p) {
+    INSTRUMENTS[row].beats = beats;
+    INSTRUMENTS[row].rot = rot || 0;
+    manualOverride[row] = null;
+    const rowEl = gridEl.children[row];
+    rowEl.querySelector('.row-beats input').value = beats;
+    rowEl.querySelector('.bval').textContent = beats;
+    rowEl.querySelector('.row-rot input').value = rot || 0;
+    rowEl.querySelector('.rval').textContent = rot || 0;
+    updateStepDisplay(row);
+  }
+}
+
+// ——— KEYBOARD ———
+window.addEventListener('keydown', (e) => {
+  if (e.key === ' ') { e.preventDefault(); togglePlay(); }
+});
+
+// ——— ANIMATION ———
+function animate() {
+  requestAnimationFrame(animate);
+  if (playing) updatePlayhead();
+}
+
+buildGrid();
+animate();
+// Auto-load a preset
+loadPreset('son');
+</script>
+</body>
+</html>

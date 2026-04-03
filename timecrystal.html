@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Time Crystal</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #080810;
+    overflow: hidden;
+    font-family: 'Courier New', monospace;
+  }
+  canvas { display: block; }
+  #info {
+    position: fixed;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: #333;
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-align: center;
+    pointer-events: none;
+    line-height: 1.8;
+  }
+  #controls {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    z-index: 1;
+  }
+  .ctrl {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #444;
+    font-size: 11px;
+  }
+  .ctrl input { width: 70px; accent-color: #666; }
+  .ctrl .val { width: 40px; text-align: right; color: #555; }
+  button {
+    padding: 4px 12px;
+    background: #151520;
+    border: 1px solid #333;
+    border-radius: 3px;
+    color: #777;
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    letter-spacing: 1px;
+  }
+  button:hover { border-color: #555; }
+  #graph {
+    position: fixed;
+    bottom: 50px;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 1px solid #1a1a25;
+    border-radius: 3px;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<canvas id="graph" width="400" height="80"></canvas>
+
+<div id="controls">
+  <div class="ctrl">
+    asymmetry
+    <input type="range" id="asymSlider" min="10" max="60" value="35">
+    <span class="val" id="asymVal">3.5</span>
+  </div>
+  <div class="ctrl">
+    damping
+    <input type="range" id="dampSlider" min="5" max="40" value="15">
+    <span class="val" id="dampVal">0.15</span>
+  </div>
+  <div class="ctrl">
+    coupling
+    <input type="range" id="coupSlider" min="10" max="100" value="50">
+    <span class="val" id="coupVal">50</span>
+  </div>
+  <button onclick="resetParticles()">reset</button>
+</div>
+
+<div id="info">
+  nonreciprocal particles — big pushes small harder than small pushes big<br>
+  if time-translation symmetry breaks, the system oscillates spontaneously
+</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const graphCanvas = document.getElementById('graph');
+const gctx = graphCanvas.getContext('2d');
+
+let W, H;
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ——— PARAMETERS ———
+let ASYM_RATIO = 3.5;   // how much harder big pushes small vs reverse
+let DAMPING = 0.15;
+let COUPLING = 50;
+
+document.getElementById('asymSlider').addEventListener('input', (e) => {
+  ASYM_RATIO = parseInt(e.target.value) / 10;
+  document.getElementById('asymVal').textContent = ASYM_RATIO.toFixed(1);
+});
+document.getElementById('dampSlider').addEventListener('input', (e) => {
+  DAMPING = parseInt(e.target.value) / 100;
+  document.getElementById('dampVal').textContent = DAMPING.toFixed(2);
+});
+document.getElementById('coupSlider').addEventListener('input', (e) => {
+  COUPLING = parseInt(e.target.value);
+  document.getElementById('coupVal').textContent = COUPLING;
+});
+
+// ——— PARTICLES ———
+const N_BIG = 8;
+const N_SMALL = 24;
+const N = N_BIG + N_SMALL;
+let particles = [];
+
+function initParticles() {
+  particles = [];
+  const cx = W / 2, cy = H / 2;
+  const spread = Math.min(W, H) * 0.25;
+
+  for (let i = 0; i < N; i++) {
+    const isBig = i < N_BIG;
+    const angle = Math.random() * Math.PI * 2;
+    const r = Math.random() * spread;
+    particles.push({
+      x: cx + Math.cos(angle) * r,
+      y: cy + Math.sin(angle) * r,
+      vx: (Math.random() - 0.5) * 10,
+      vy: (Math.random() - 0.5) * 10,
+      type: isBig ? 'big' : 'small',
+      radius: isBig ? 10 : 5,
+      mass: isBig ? 4 : 1,
+    });
+  }
+}
+
+function resetParticles() {
+  initParticles();
+  separationHistory = [];
+  phaseHistory = [];
+}
+
+// ——— PHYSICS ———
+function update(dt) {
+  const cx = W / 2, cy = H / 2;
+  const confineR = Math.min(W, H) * 0.35;
+  const cutoff = 120;
+
+  // Compute forces
+  for (let i = 0; i < N; i++) {
+    const p = particles[i];
+    let fx = 0, fy = 0;
+
+    for (let j = 0; j < N; j++) {
+      if (i === j) continue;
+      const q = particles[j];
+      const dx = p.x - q.x;
+      const dy = p.y - q.y;
+      const d2 = dx * dx + dy * dy;
+      const d = Math.sqrt(d2);
+      if (d < 1) continue;
+      if (d > cutoff) continue;
+
+      const nx = dx / d;
+      const ny = dy / d;
+
+      // Repulsive force, linear falloff
+      let f = COUPLING * (1 - d / cutoff);
+
+      // Hard core repulsion at close range
+      if (d < (p.radius + q.radius) * 1.5) {
+        f += COUPLING * 2 * ((p.radius + q.radius) * 1.5 - d) / ((p.radius + q.radius) * 1.5);
+      }
+
+      // NONRECIPROCAL: force on p from q
+      // If p is small and q is big → p gets pushed hard (big scatters more "sound")
+      // If p is big and q is small → p gets pushed weakly
+      if (p.type === 'small' && q.type === 'big') {
+        f *= ASYM_RATIO;
+      } else if (p.type === 'big' && q.type === 'small') {
+        f *= 1 / ASYM_RATIO;
+      }
+      // Same type: symmetric (Newton's 3rd holds)
+
+      fx += nx * f;
+      fy += ny * f;
+    }
+
+    // Soft confinement — harmonic potential toward center
+    const dcx = p.x - cx;
+    const dcy = p.y - cy;
+    const dr = Math.sqrt(dcx * dcx + dcy * dcy);
+    const confineStr = 0.08;
+    fx -= dcx * confineStr;
+    fy -= dcy * confineStr;
+    // Harder wall outside confineR
+    if (dr > confineR) {
+      const excess = dr - confineR;
+      fx -= (dcx / dr) * excess * 1.5;
+      fy -= (dcy / dr) * excess * 1.5;
+    }
+
+    // Damping
+    fx -= p.vx * DAMPING * p.mass;
+    fy -= p.vy * DAMPING * p.mass;
+
+    // Apply
+    p.vx += (fx / p.mass) * dt;
+    p.vy += (fy / p.mass) * dt;
+  }
+
+  // Update positions
+  for (const p of particles) {
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+  }
+}
+
+// ——— MEASUREMENT ———
+// Track center-of-mass separation between big and small groups
+let separationHistory = [];
+let phaseHistory = [];
+
+function measure() {
+  let bx = 0, by = 0, sx = 0, sy = 0;
+  let nb = 0, ns = 0;
+  for (const p of particles) {
+    if (p.type === 'big') { bx += p.x; by += p.y; nb++; }
+    else { sx += p.x; sy += p.y; ns++; }
+  }
+  bx /= nb; by /= nb;
+  sx /= ns; sy /= ns;
+
+  const dx = bx - sx;
+  const dy = by - sy;
+  const sep = Math.sqrt(dx * dx + dy * dy);
+  const angle = Math.atan2(dy, dx);
+
+  separationHistory.push(sep);
+  phaseHistory.push(angle);
+  if (separationHistory.length > 400) {
+    separationHistory.shift();
+    phaseHistory.shift();
+  }
+}
+
+// ——— DRAWING ———
+function drawParticles() {
+  // Trail effect
+  ctx.fillStyle = 'rgba(8, 8, 16, 0.15)';
+  ctx.fillRect(0, 0, W, H);
+
+  // Confinement circle (very faint)
+  const cx = W / 2, cy = H / 2;
+  const confineR = Math.min(W, H) * 0.35;
+  ctx.beginPath();
+  ctx.arc(cx, cy, confineR, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(40, 40, 60, 0.3)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Particles
+  for (const p of particles) {
+    const isBig = p.type === 'big';
+
+    // Glow
+    const speed = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
+    const glowR = p.radius * (1.5 + speed * 0.02);
+
+    const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, glowR);
+    if (isBig) {
+      grad.addColorStop(0, `rgba(220, 160, 80, ${0.6 + speed * 0.005})`);
+      grad.addColorStop(0.5, 'rgba(180, 100, 40, 0.2)');
+      grad.addColorStop(1, 'rgba(120, 60, 20, 0)');
+    } else {
+      grad.addColorStop(0, `rgba(80, 140, 220, ${0.5 + speed * 0.005})`);
+      grad.addColorStop(0.5, 'rgba(40, 80, 160, 0.15)');
+      grad.addColorStop(1, 'rgba(20, 40, 100, 0)');
+    }
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, glowR, 0, Math.PI * 2);
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Core
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.radius * 0.6, 0, Math.PI * 2);
+    ctx.fillStyle = isBig ? '#d4a050' : '#5090d0';
+    ctx.fill();
+  }
+}
+
+function drawGraph() {
+  const gw = graphCanvas.width;
+  const gh = graphCanvas.height;
+  gctx.fillStyle = 'rgba(8, 8, 16, 0.95)';
+  gctx.fillRect(0, 0, gw, gh);
+
+  if (separationHistory.length < 2) return;
+
+  // Draw separation over time
+  const maxSep = Math.max(...separationHistory, 1);
+
+  gctx.beginPath();
+  gctx.strokeStyle = 'rgba(150, 120, 80, 0.6)';
+  gctx.lineWidth = 1;
+  for (let i = 0; i < separationHistory.length; i++) {
+    const x = (i / (separationHistory.length - 1)) * gw;
+    const y = gh - (separationHistory[i] / maxSep) * (gh - 4);
+    if (i === 0) gctx.moveTo(x, y);
+    else gctx.lineTo(x, y);
+  }
+  gctx.stroke();
+
+  // Draw phase angle
+  gctx.beginPath();
+  gctx.strokeStyle = 'rgba(80, 120, 180, 0.4)';
+  gctx.lineWidth = 1;
+  for (let i = 0; i < phaseHistory.length; i++) {
+    const x = (i / (phaseHistory.length - 1)) * gw;
+    const y = gh / 2 - (phaseHistory[i] / Math.PI) * (gh / 2 - 4);
+    if (i === 0) gctx.moveTo(x, y);
+    else gctx.lineTo(x, y);
+  }
+  gctx.stroke();
+
+  // Labels
+  gctx.fillStyle = '#444';
+  gctx.font = '9px monospace';
+  gctx.fillText('separation', 4, 10);
+  gctx.fillStyle = '#335';
+  gctx.fillText('phase', 4, 20);
+}
+
+// ——— MAIN LOOP ———
+const DT = 0.3;
+const SUBSTEPS = 3;
+let frame = 0;
+
+function loop() {
+  requestAnimationFrame(loop);
+
+  for (let s = 0; s < SUBSTEPS; s++) {
+    update(DT / SUBSTEPS);
+  }
+
+  frame++;
+  if (frame % 3 === 0) measure();
+
+  drawParticles();
+  if (frame % 6 === 0) drawGraph();
+}
+
+initParticles();
+loop();
+</script>
+</body>
+</html>
