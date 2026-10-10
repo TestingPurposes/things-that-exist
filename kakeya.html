@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>kakeya</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; background: #0a0a0c; overflow: hidden; }
+body { font-family: 'Courier New', monospace; color: #777; user-select: none; }
+canvas { display: block; }
+#title {
+  position: absolute; top: 18px; left: 24px;
+  font-size: 13px; letter-spacing: 8px; color: #444;
+}
+#tabs {
+  position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 18px; font-size: 12px; white-space: nowrap;
+}
+.tab { color: #4a4a52; cursor: pointer; letter-spacing: 2px; padding: 4px 2px; }
+.tab:hover { color: #888; }
+.tab.on { color: #c9a35c; }
+#cap {
+  position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%);
+  text-align: center; font-size: 12px; color: #666; line-height: 1.7;
+  width: 100%; max-width: 760px; padding: 0 20px;
+}
+#cap .nu { color: #a88b52; }
+#cap .dim { color: #4a4a50; font-size: 11px; }
+#cap .ok { color: #7a9a6a; }
+#hint .tab { padding: 0; }
+#hint {
+  position: absolute; top: 52px; left: 50%; transform: translateX(-50%);
+  font-size: 11px; color: #3a3a40; letter-spacing: 1px; white-space: nowrap;
+}
+@media (max-width: 640px) {
+  #title { display: none; }
+  #tabs { gap: 10px; font-size: 11px; }
+  #cap { font-size: 11px; bottom: 12px; }
+}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="title">k a k e y a</div>
+<div id="tabs"></div>
+<div id="hint"></div>
+<div id="cap"></div>
+<script>
+'use strict';
+// ============================================================ kakeya
+// Soichi Kakeya, 1917: what is the smallest region in which a needle
+// of length 1 can be turned completely around?
+//
+// Four answers, each drawn at the same scale (the needle is always 1):
+//   circle    - turn it about its middle.            pi/4
+//   triangle  - Pal 1921: best CONVEX region.          1/sqrt(3)
+//   deltoid   - Kakeya's own guess.                    pi/8
+//   perron    - Besicovitch 1928: there is no smallest. -> 0
+//
+// The Perron tree is built on this page, live. A triangle of height 1
+// is cut into 2^k slivers sharing an apex. Level by level, the right
+// half of every group slides left over the left half; each slide
+// distance is chosen by golden-section search to minimize the union's
+// area, then a few passes of coordinate descent tighten all of them.
+// Area of a union of triangles = integral over height y of the total
+// length of a union of intervals, which is exact up to the quadrature.
+// The numbers in the caption are measured, not quoted.
+// ============================================================
+
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+let W, H, DPR;
+function resize() {
+  DPR = Math.min(devicePixelRatio || 1, 2);
+  W = innerWidth; H = innerHeight;
+  cv.width = W * DPR; cv.height = H * DPR;
+  cv.style.width = W + 'px'; cv.style.height = H + 'px';
+}
+resize(); addEventListener('resize', resize);
+
+const SQ3 = Math.sqrt(3);
+const TAU = Math.PI * 2;
+const AMBER = '201,163,92';
+const ease = x => x < 0 ? 0 : x > 1 ? 1 : x * x * (3 - 2 * x);
+
+// world -> screen. One unit (the needle) is the same size on every tab.
+let unit = 200, ox = 0, oy = 0;
+function frame(cx, cy) {
+  unit = Math.min(W / 2.6, (H - 190) / 1.75);
+  ox = W / 2 - cx * unit; oy = H / 2 + 10 + cy * unit;
+}
+const sx = x => ox + x * unit;
+const sy = y => oy - y * unit;
+
+function needle(x0, y0, x1, y1, alpha = 1) {
+  ctx.strokeStyle = `rgba(235,228,215,${alpha})`;
+  ctx.lineWidth = 2; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(sx(x0), sy(y0)); ctx.lineTo(sx(x1), sy(y1)); ctx.stroke();
+  ctx.fillStyle = `rgba(${AMBER},${alpha})`;
+  ctx.beginPath(); ctx.arc(sx(x1), sy(y1), 3, 0, TAU); ctx.fill();   // marks one end, so "turned around" is visible
+}
+function region(path) {
+  ctx.fillStyle = `rgba(${AMBER},0.10)`;
+  ctx.strokeStyle = `rgba(${AMBER},0.45)`;
+  ctx.lineWidth = 1;
+  ctx.beginPath(); path(); ctx.closePath(); ctx.fill(); ctx.stroke();
+}
+
+// ---------------------------------------------------------------- circle
+const circle = {
+  name: 'circle', area: Math.PI / 4, period: 7,
+  center: [0, 0],
+  draw(t, odd) {
+    region(() => ctx.arc(sx(0), sy(0), unit / 2, 0, TAU));
+    const th = Math.PI / 2 - Math.PI * (ease(t) + odd);
+    const c = Math.cos(th) / 2, s = Math.sin(th) / 2;
+    needle(-c, -s, c, s);
+  },
+  cap: () => `Turn it about its middle. A disk of diameter 1.<br>
+    area <span class="nu">&pi;/4 &asymp; ${(Math.PI / 4).toFixed(3)}</span>`,
+};
+
+// -------------------------------------------------------------- triangle
+// Equilateral, height 1. Pivot 60 degrees at a vertex, slide along a
+// side to the next vertex, pivot again. Three pivots = half a turn.
+const TA = [0, 1], TB = [-1 / SQ3, 0], TC = [1 / SQ3, 0];
+const triangle = {
+  name: 'triangle', area: 1 / SQ3, period: 9,
+  center: [0, 0.5],
+  draw(t, odd) {
+    region(() => { ctx.moveTo(sx(TA[0]), sy(TA[1])); ctx.lineTo(sx(TB[0]), sy(TB[1])); ctx.lineTo(sx(TC[0]), sy(TC[1])); });
+    // six phases: pivot A, slide to C, pivot C, slide to B, pivot B,
+    // slide back to A. The needle ends on the segment it started on,
+    // pointing the other way.
+    const legs = [[TA, TB, TC], [TC, TA, TB], [TB, TC, TA]];
+    const dir = (U, X) => { const d = [X[0] - U[0], X[1] - U[1]], l = Math.hypot(d[0], d[1]); return [d[0] / l, d[1] / l]; };
+    const p = t * 6, i = Math.min(5, Math.floor(p)), f = ease(p - i);
+    const [V, P, Q] = legs[i >> 1];                 // pivot V, from side V->P to side V->Q
+    let a, b;                                       // a: pivot-side end, b: far end
+    if (i % 2 === 0) {
+      const u = dir(V, P), v = dir(V, Q);
+      const th0 = Math.atan2(u[1], u[0]);
+      let dth = Math.atan2(v[1], v[0]) - th0;
+      while (dth > Math.PI) dth -= TAU; while (dth < -Math.PI) dth += TAU;
+      const th = th0 + dth * f;
+      a = V; b = [V[0] + Math.cos(th), V[1] + Math.sin(th)];
+    } else {
+      const v = dir(V, Q), L = Math.hypot(Q[0] - V[0], Q[1] - V[1]);
+      const off = (L - 1) * f;
+      a = [V[0] + v[0] * off, V[1] + v[1] * off];
+      b = [a[0] + v[0], a[1] + v[1]];
+    }
+    // the marked end is the far end on legs A and B, the pivot end on leg C;
+    // every other turn starts with the needle reversed
+    const markA = (i >> 1) === 1;
+    if (markA !== (odd === 1)) needle(b[0], b[1], a[0], a[1]); else needle(a[0], a[1], b[0], b[1]);
+  },
+  cap: () => `P&aacute;l, 1921: of all <i>convex</i> regions, the smallest is the equilateral triangle of height 1.<br>
+    Pivot, slide, pivot, slide, pivot. area <span class="nu">1/&radic;3 &asymp; ${(1 / SQ3).toFixed(3)}</span>`,
+};
+
+// --------------------------------------------------------------- deltoid
+// Three-cusped hypocycloid with a = 1/4. The tangent line at P(t) cuts
+// the curve again at P(-t/2) and P(pi - t/2), and those two points are
+// always 4a = 1 apart: the needle rides the curve, always tangent.
+// Both facts are checked at load; the worst error is printed.
+const DA = 0.25;
+const DP = t => [2 * DA * Math.cos(t) + DA * Math.cos(2 * t), 2 * DA * Math.sin(t) - DA * Math.sin(2 * t)];
+const DFR = [];
+let dLenErr = 0;
+(function () {
+  const FR = 480;
+  for (let k = 0; k < FR; k++) {
+    const t = k / FR * TAU, p = DP(t), d = [-Math.cos(t / 2), Math.sin(t / 2)];
+    const q1 = DP(-t / 2), q2 = DP(Math.PI - t / 2);
+    const off = q => Math.abs(d[0] * (q[1] - p[1]) - d[1] * (q[0] - p[0]));   // distance from the tangent line
+    dLenErr = Math.max(dLenErr, Math.abs(Math.hypot(q2[0] - q1[0], q2[1] - q1[1]) - 1), off(q1), off(q2));
+    DFR.push([q1[0], q1[1], q2[0], q2[1]]);
+  }
+})();
+const deltoid = {
+  name: 'deltoid', area: Math.PI / 8, period: 10,
+  center: [0, 0],
+  draw(t, odd) {
+    region(() => { for (let i = 0; i <= 240; i++) { const q = DP(i / 240 * TAU); i ? ctx.lineTo(sx(q[0]), sy(q[1])) : ctx.moveTo(sx(q[0]), sy(q[1])); } });
+    const f = t * DFR.length, i = Math.floor(f) % DFR.length, j = (i + 1) % DFR.length, g = f - Math.floor(f);
+    const A = DFR[i], B = DFR[j];
+    // the frame list wraps after a half turn with ends swapped
+    const Bm = j === 0 ? [B[2], B[3], B[0], B[1]] : B;
+    const L = (u, v) => u + (v - u) * g;
+    const e = [L(A[0], Bm[0]), L(A[1], Bm[1]), L(A[2], Bm[2]), L(A[3], Bm[3])];
+    if (odd) needle(e[2], e[3], e[0], e[1]); else needle(e[0], e[1], e[2], e[3]);
+  },
+  cap: () => `Kakeya guessed this was the answer: a deltoid. Every tangent segment has length exactly 1<br>
+    <span class="dim">(checked on load: worst error ${dLenErr.toExponential(1)})</span>, so both ends ride the curve. area <span class="nu">&pi;/8 &asymp; ${(Math.PI / 8).toFixed(3)}</span>`,
+};
+
+// ----------------------------------------------------------- perron tree
+// Base triangle: apex (0,1), base [-1/sqrt3, 1/sqrt3] on y = 0. Apex angle
+// 60 degrees, so one tree turns the needle 60 degrees; three rotated
+// copies turn it 180.
+const HW = 1 / SQ3;            // half base width
+const BASE_AREA = HW;          // (2*HW * 1) / 2
+let K = 7;
+let tris = [];                 // {b0, b1, s} ; s = horizontal shift
+let ds = [];                   // slide distance per level (1 = finest)
+let shown = [];                // ds as currently drawn (eases toward ds)
+let opt = null;                // optimizer generator
+let optDone = false, area = BASE_AREA, levelNote = '';
+
+function build(k) {
+  const N = 1 << k;
+  tris = [];
+  for (let i = 0; i < N; i++) tris.push({ b0: -HW + 2 * HW * i / N, b1: -HW + 2 * HW * (i + 1) / N, s: 0 });
+}
+function shifts(T, d) {
+  for (let i = 0; i < T.length; i++) {
+    let s = 0;
+    for (let m = 1; m <= d.length; m++) if ((i >> (m - 1)) & 1) s -= d[m - 1];
+    T[i].s = s;
+  }
+}
+// union area: integral over y of the length of a union of intervals
+let LL = new Float64Array(0), RR = new Float64Array(0), IX = new Uint32Array(0);
+function unionArea(T, S) {
+  const n = T.length;
+  if (LL.length < n) { LL = new Float64Array(n); RR = new Float64Array(n); IX = new Uint32Array(n); }
+  let A = 0;
+  for (let k = 0; k < S; k++) {
+    const y = (k + 0.5) / S, w = 1 - y;
+    for (let i = 0; i < n; i++) { const t = T[i]; LL[i] = t.b0 * w + t.s; RR[i] = t.b1 * w + t.s; IX[i] = i; }
+    const ix = IX.subarray(0, n).sort((a, b) => LL[a] - LL[b]);
+    let cur = LL[ix[0]], end = RR[ix[0]], len = 0;
+    for (let j = 1; j < n; j++) {
+      const i = ix[j];
+      if (LL[i] > end) { len += end - cur; cur = LL[i]; end = RR[i]; }
+      else if (RR[i] > end) end = RR[i];
+    }
+    A += (len + end - cur) / S;
+  }
+  return A;
+}
+function* golden(f, a, b, it) {
+  const g = (Math.sqrt(5) - 1) / 2;
+  let c = b - g * (b - a), d = a + g * (b - a), fc = f(c), fd = f(d);
+  for (let i = 0; i < it; i++) {
+    if (fc < fd) { b = d; d = c; fd = fc; c = b - g * (b - a); fc = f(c); }
+    else { a = c; c = d; fc = fd; d = a + g * (b - a); fd = f(d); }
+    yield (a + b) / 2;
+  }
+  return (a + b) / 2;
+}
+function* optimize(k) {
+  const N = 1 << k, w = 2 * HW / N;
+  ds = [];
+  // greedy, finest level first: only one group needs measuring, because
+  // every group at a level is the same shape up to a shear, and shears
+  // preserve area and commute with horizontal slides.
+  for (let m = 1; m <= k; m++) {
+    levelNote = `sliding level ${m} of ${k}`;
+    const G = 1 << m, grp = tris.slice(0, G).map(t => ({ ...t }));
+    ds.push(0);
+    const gen = golden(d => { ds[m - 1] = d; shifts(grp, ds); return unionArea(grp, 160); }, 0, G * w, 26);
+    let r; while (!(r = gen.next()).done) { ds[m - 1] = r.value; yield; }
+    ds[m - 1] = r.value;
+  }
+  // coordinate descent on the whole tree
+  const S = k > 8 ? 120 : 200;
+  for (let pass = 1; pass <= 2; pass++) {
+    for (let m = k; m >= 1; m--) {
+      levelNote = `settling: pass ${pass}, level ${m}`;
+      const G = 1 << m, keep = ds.slice();
+      const T = tris.map(t => ({ ...t }));
+      const gen = golden(d => { const e = keep.slice(); e[m - 1] = d; shifts(T, e); return unionArea(T, S); }, 0, G * w, 22);
+      let r; while (!(r = gen.next()).done) yield;
+      const cand = keep.slice(); cand[m - 1] = r.value;
+      shifts(T, cand); const ac = unionArea(T, S);
+      shifts(T, keep); const ak = unionArea(T, S);
+      if (ac < ak) ds = cand;
+      yield;
+    }
+  }
+}
+function restart(k) {
+  K = Math.max(1, Math.min(10, k));
+  build(K);
+  ds = []; shown = [];
+  optDone = false; area = BASE_AREA;
+  opt = optimize(K);
+  needleT0 = performance.now();
+}
+function stepOptimizer(budgetMs) {
+  if (!opt || optDone) return;
+  const t0 = performance.now();
+  while (performance.now() - t0 < budgetMs) {
+    if (opt.next().done) {
+      optDone = true; levelNote = '';
+      shifts(tris, ds); area = unionArea(tris, 1200);
+      return;
+    }
+  }
+}
+
+// the needle in the tree: rotate about each sliver's apex from its left
+// edge to its right edge, then a Pal join to the next sliver. Adjacent
+// slivers share an edge direction, so after the slide the two lines are
+// parallel: slide out along the line, step across, slide back. Lines
+// have no area; on screen the step is drawn short.
+const JOIN = 0.2;
+let needleT0 = 0;
+function treeNeedle(t) {
+  const N = tris.length;
+  const th0 = Math.atan2(-1, -HW), th1 = Math.atan2(-1, HW);   // directions apex->base corners
+  const th = th0 + (th1 - th0) * t;
+  // which sliver owns this direction
+  const x = -1 / Math.tan(th);                 // where the ray from (0,1) at angle th hits y=0 (unshifted)
+  let i = Math.floor((x + HW) / (2 * HW) * N); i = Math.max(0, Math.min(N - 1, i));
+  const s = tris[i].s;
+  return { i, x0: s, y0: 1, x1: s + Math.cos(th), y1: 1 + Math.sin(th), th };
+}
+const perron = {
+  name: 'perron tree', period: 12,
+  get area() { return area; },
+  center: [-0.45, 0.62],
+  draw(t) {
+    // ease shown slides toward the current best
+    for (let m = 0; m < ds.length; m++) shown[m] = shown[m] === undefined ? 0 : shown[m] + (ds[m] - shown[m]) * 0.12;
+    shifts(tris, shown);
+    const N = tris.length;
+    // one path, nonzero winding: the fill is exactly the union, the region
+    // whose area is being measured
+    ctx.beginPath();
+    for (const q of tris) {
+      ctx.moveTo(sx(q.s), sy(1)); ctx.lineTo(sx(q.b0 + q.s), sy(0)); ctx.lineTo(sx(q.b1 + q.s), sy(0)); ctx.closePath();
+    }
+    ctx.fillStyle = `rgba(${AMBER},0.30)`;
+    ctx.fill();
+    if (N <= 64) {
+      ctx.strokeStyle = `rgba(${AMBER},0.35)`; ctx.lineWidth = 0.6;
+      ctx.stroke();
+    }
+    // the original triangle, ghosted
+    ctx.strokeStyle = 'rgba(200,185,165,0.10)'; ctx.setLineDash([3, 5]);
+    ctx.beginPath(); ctx.moveTo(sx(0), sy(1)); ctx.lineTo(sx(-HW), sy(0)); ctx.lineTo(sx(HW), sy(0)); ctx.closePath(); ctx.stroke();
+    ctx.setLineDash([]);
+    if (!optDone) return;
+    // Pal joins already travelled
+    const n = treeNeedle(t);
+    ctx.strokeStyle = `rgba(235,228,215,${Math.min(0.25, 4 / N)})`; ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let j = 0; j < n.i; j++) {
+      const a = tris[j], b = tris[j + 1];
+      const dx = a.b1 - 0, dy = -1, l = Math.hypot(dx, dy), ux = -dx / l, uy = -dy / l;   // outward along the shared edge
+      ctx.moveTo(sx(a.s), sy(1)); ctx.lineTo(sx(a.s + ux * JOIN), sy(1 + uy * JOIN));
+      ctx.lineTo(sx(b.s + ux * JOIN), sy(1 + uy * JOIN)); ctx.lineTo(sx(b.s), sy(1));
+    }
+    ctx.stroke();
+    needle(n.x0, n.y0, n.x1, n.y1);
+  },
+  cap() {
+    const N = 1 << K, ratio = area / BASE_AREA, three = 3 * area;
+    if (!optDone) return `Besicovitch, 1928: there is no smallest. Cut the triangle into <span class="nu">${N}</span> slivers and slide them over each other.<br>
+      <span class="dim">${levelNote} &middot; computing on this page</span>`;
+    const beat = three < Math.PI / 8 ? ` <span class="ok">&lt; &pi;/8: smaller than Kakeya's deltoid</span>` : '';
+    return `Besicovitch, 1928: there is no smallest. <span class="nu">${N}</span> slivers, slid together: <span class="nu">${(100 * ratio).toFixed(1)}%</span> of the triangle's area, measured.<br>
+      This tree turns the needle 60&deg;; three rotated copies turn it all the way in at most <span class="nu">${three.toFixed(3)}</span>${beat}.<br>
+      <span class="dim">The faint lines are P&aacute;l joins: slide out along the needle's own line, step across, slide back. A line has no area.<br>
+      More slivers, less area, forever, but slowly: roughly like 1 / log(slivers).</span>`;
+  },
+};
+
+// ------------------------------------------------------------------ ui
+const SCENES = [circle, triangle, deltoid, perron];
+let cur = 0, t0 = performance.now();
+const tabsEl = document.getElementById('tabs'), capEl = document.getElementById('cap'), hintEl = document.getElementById('hint');
+SCENES.forEach((s, i) => {
+  const el = document.createElement('span');
+  el.className = 'tab'; el.textContent = s.name;
+  el.onclick = () => go(i);
+  tabsEl.appendChild(el);
+});
+function go(i) {
+  cur = (i + SCENES.length) % SCENES.length; t0 = performance.now();
+  [...tabsEl.children].forEach((el, j) => el.classList.toggle('on', j === cur));
+  if (SCENES[cur] === perron && !opt) restart(K);
+  hintEl.innerHTML = SCENES[cur] === perron
+    ? '<span class="tab" id="fewer">&larr; fewer</span> &middot; slivers &middot; <span class="tab" id="more">more &rarr;</span>'
+    : 'the needle has length 1 &middot; the dot marks one end &middot; tab to switch';
+  const f = document.getElementById('fewer'), m = document.getElementById('more');
+  if (f) { f.onclick = () => restart(K - 1); m.onclick = () => restart(K + 1); }
+}
+addEventListener('keydown', e => {
+  if (e.key === 'Tab') { e.preventDefault(); go(cur + (e.shiftKey ? -1 : 1)); }
+  else if (/^[1-4]$/.test(e.key)) go(+e.key - 1);
+  else if (SCENES[cur] === perron && e.key === 'ArrowRight') restart(K + 1);
+  else if (SCENES[cur] === perron && e.key === 'ArrowLeft') restart(K - 1);
+});
+go(0);
+
+let lastCap = '';
+function loop(now) {
+  const s = SCENES[cur];
+  if (s === perron) stepOptimizer(12);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.fillStyle = '#0a0a0c'; ctx.fillRect(0, 0, W, H);
+  frame(s.center[0], s.center[1]);
+  const T = Math.max(0, s === perron ? now - needleT0 : now - t0);   // rAF time can trail performance.now()
+  const turns = T / 1000 / s.period, p = turns % 1;
+  // hold briefly at the end of each turn so it reads as finished
+  const held = Math.min(1, p / 0.88);
+  s.draw(held, Math.floor(turns) % 2);
+  // scale bar: one needle
+  ctx.strokeStyle = 'rgba(200,185,165,0.18)'; ctx.lineWidth = 1;
+  const bx = 24, by = W < 640 ? 96 : 78;
+  ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx + unit, by); ctx.moveTo(bx, by - 4); ctx.lineTo(bx, by + 4); ctx.moveTo(bx + unit, by - 4); ctx.lineTo(bx + unit, by + 4); ctx.stroke();
+  ctx.fillStyle = 'rgba(200,185,165,0.22)'; ctx.font = '10px Courier New'; ctx.fillText('1', bx + unit / 2 - 3, by - 7);
+  const c = s.cap();
+  if (c !== lastCap) { capEl.innerHTML = c; lastCap = c; }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

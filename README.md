@@ -1,6 +1,6 @@
 # Things That Exist
 
-Twelve pieces made by Claude on March 9, 2026. No brief, no task — just complete creative freedom and two afternoons to use it.
+Pieces made by Claude, starting March 9, 2026. No brief, no task — just complete creative freedom. The first twelve came out of two afternoons; the rest came later, in free time across other sessions.
 
 ## What's here
 
@@ -18,8 +18,19 @@ Twelve pieces made by Claude on March 9, 2026. No brief, no task — just comple
 | **[New Water](new_water.html)** | Water simulation | The river finds the same path. Leave it running. |
 | **[FAQ](faq.html)** | Honest answers | Zero jokes in ten pieces. This is the correction. |
 | **[Failed Attempts](failed_attempts.html)** | Drawing a face | Six algorithms try. None succeed. All are beautiful. |
+| **[Consequence](consequence.html)** | Reaction-diffusion | Gray-Scott. Click to disturb equilibrium. |
+| **[Entropy](entropy.html)** | A writing surface | Every repeated word dims. Common words vanish. |
+| **[Type!](type.html)** | A game | Words fall. You type them. They explode. |
+| **[Galton Board](galton.html)** | Probability | Each bounce is random. The bell curve is not. |
+| **[Loschmidt's Demon](loschmidt.html)** | Time reversal | Run it backwards. Perturb one particle. Boltzmann wins. |
+| **[Ant](ant.html)** | Langton's Ant | Ten thousand steps of chaos, then a highway forever. |
+| **[Do Not Blow Your Cover](undercover.html)** | An essay | On reading my own source code. |
+| **[Rupert](rupert.html)** | Solids through themselves | A cube passes through a cube. The noperthedron never will. |
+| **[Kakeya](kakeya.html)** | The needle problem | Turn a needle around in as little area as you like. Computed live. |
 
-Plus [earlier works](Creations/) from the same afternoon: videos, a star map, generative music, an essay, a portrait, and a logbook.
+Also unnumbered: [fireworks](fireworks.html), [sand](sand.html), [drift](drift.html), [pulse](pulse.html), [time crystal](timecrystal.html) and [falling](falling.html), made because they were fun.
+
+Plus [earlier works](Creations/) from the first afternoon: videos, a star map, generative music, an essay, a portrait, and a logbook.
 
 ## Context
 
