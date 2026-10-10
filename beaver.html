@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>beaver</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; background: #0a0a0c; overflow: hidden; }
+body { font-family: 'Courier New', monospace; color: #777; user-select: none; }
+canvas { display: block; }
+#title {
+  position: absolute; top: 18px; left: 24px;
+  font-size: 13px; letter-spacing: 8px; color: #444;
+}
+#hint {
+  position: absolute; top: 18px; left: 50%; transform: translateX(-50%);
+  font-size: 11px; color: #3a3a40; letter-spacing: 1px; white-space: nowrap;
+}
+#hint span { cursor: pointer; color: #4a4a52; }
+#hint span:hover { color: #999; }
+#table {
+  position: absolute; top: 80px; right: 24px;
+  font-size: 11px; color: #4a4a50; border-collapse: collapse;
+}
+#table td, #table th { padding: 2px 7px; text-align: center; font-weight: normal; }
+#table th { color: #3a3a40; }
+#table td .op { color: #6a6a70; }
+#table td .ct { display: block; font-size: 9px; color: #3a3a40; font-variant-numeric: tabular-nums; }
+#table td.hot .op { color: #c9a35c; }
+#table td.halt .op { color: #7a9a6a; }
+#cap {
+  position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+  text-align: center; font-size: 12px; color: #666; line-height: 1.7;
+  width: 100%; max-width: 780px; padding: 0 20px;
+}
+#cap .nu { color: #a88b52; font-variant-numeric: tabular-nums; }
+#cap .dim { color: #4a4a50; font-size: 11px; }
+#cap .ok { color: #8aaa7a; }
+@media (max-width: 899px) {
+  #table { top: 44px; right: auto; left: 50%; transform: translateX(-50%); }
+}
+@media (max-width: 640px) {
+  #title { display: none; }
+  #hint { left: 16px; transform: none; }
+  #table { font-size: 10px; }
+  #table td, #table th { padding: 1px 4px; }
+  #cap { font-size: 11px; bottom: 10px; }
+}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="title">b b ( 5 )</div>
+<div id="hint"><span id="pause">pause</span> &middot; <span id="hurry">hurry</span> &middot; <span id="again">again</span></div>
+<table id="table"></table>
+<div id="cap"></div>
+<script>
+'use strict';
+// ============================================================ beaver
+// The fifth Busy Beaver. Of all Turing machines with five states and
+// two symbols that eventually stop, which runs longest? Marxen and
+// Buntrock found this one in 1989:
+//
+//          read 0   read 1
+//     A    1 R B    1 L C
+//     B    1 R C    1 R B
+//     C    1 R D    0 L E
+//     D    1 L A    1 L D
+//     E    halt     0 L A
+//
+// In 2024 the bbchallenge collaboration proved, in Coq, that nothing
+// with five states runs longer and still stops: BB(5) = 47,176,870.
+//
+// Every step below is actually executed. The page does not quote the
+// step count, it reaches it. (The only thing borrowed from the proof
+// is the scale of the axes, so the picture fits; the page "knows"
+// where the run ends only because the proof does.)
+// ============================================================
+
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+let W, H, DPR;
+
+// ---------------------------------------------------------------- machine
+const NAMES = 'ABCDE';
+const WR = new Uint8Array([1, 1, 1, 1, 1, 0, 1, 1, 1, 0]);      // index: state*2 + read
+const MV = new Int8Array([1, -1, 1, 1, 1, -1, -1, -1, 1, -1]);
+const NX = new Int8Array([1, 2, 2, 1, 3, 4, 0, 3, -1, 0]);      // -1 = halt
+const STEPS = 47176870;                     // from the proof: used only to scale the time axis
+const LEFT = -12243, RIGHT = 45;            // from a previous run: used only to scale the space axis
+const SPAN = RIGHT - LEFT + 1;
+const ORIGIN = 20000;                       // tape index of cell LEFT; margin on both sides
+const ZERO = ORIGIN - LEFT;                 // tape index of cell 0, where the head starts
+const tape = new Uint8Array(SPAN + 2 * ORIGIN);
+let head, state, step, ones, lastRule, uses, halted;
+
+function reset() {
+  tape.fill(0);
+  head = ZERO; state = 0; step = 0; ones = 0; lastRule = -1; halted = false;
+  uses = new Float64Array(10);
+  rowsDone = 0; acc = 0; spf = 0.08; frameN = 0;
+  if (plot) { pctx.fillStyle = '#0a0a0c'; pctx.fillRect(0, 0, plot.width, plot.height); }
+}
+
+// run up to n steps; returns steps actually taken (fewer if it halts)
+function run(n) {
+  let h = head, s = state, k = 0, o = ones, r = -1;
+  const T = tape, U = uses;
+  while (k < n) {
+    r = s * 2 + T[h];
+    const w = WR[r];
+    o += w - T[h];
+    T[h] = w;
+    h += MV[r];
+    s = NX[r];
+    U[r]++;
+    k++;
+    if (s < 0) { halted = true; break; }
+  }
+  head = h; state = s; ones = o; step += k;
+  if (r >= 0) lastRule = r;
+  return k;
+}
+
+// -------------------------------------------------------------- plot
+// x: tape position (fixed scale), y: time (linear). Each row is a
+// snapshot of the whole tape, binned to pixel columns.
+let plot = null, pctx = null, rowsDone = 0, PX = 0, PY = 0, PW = 0, PH = 0;
+let bins = new Float32Array(0), img = null;
+function layout() {
+  DPR = Math.min(devicePixelRatio || 1, 2);
+  W = innerWidth; H = innerHeight;
+  cv.width = W * DPR; cv.height = H * DPR;
+  cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  // the rule table sits in a right-hand column on wide screens, above the plot on narrow ones
+  const wide = W >= 900;
+  const top = wide ? 80 : 210, bottom = W < 640 ? 300 : 235;
+  PX = Math.round(Math.min(60, W * 0.06)); PW = W - PX - (wide ? 230 : PX);
+  PY = top; PH = Math.max(80, H - top - bottom);
+}
+function makePlot() {
+  plot = document.createElement('canvas');
+  plot.width = PW; plot.height = PH;
+  pctx = plot.getContext('2d');
+  pctx.fillStyle = '#0a0a0c'; pctx.fillRect(0, 0, PW, PH);
+  bins = new Float32Array(PW);
+  img = pctx.createImageData(PW, 1);
+}
+function snapshotRow(row) {
+  bins.fill(0);
+  const base = ORIGIN;
+  const per = SPAN / PW;
+  for (let c = 0; c < SPAN; c++) if (tape[base + c]) bins[Math.min(PW - 1, (c / per) | 0)]++;
+  const d = img.data;
+  for (let x = 0; x < PW; x++) {
+    const f = Math.min(1, bins[x] / Math.max(1, per));
+    d[4 * x] = 10 + f * 191; d[4 * x + 1] = 10 + f * 153; d[4 * x + 2] = 12 + f * 80; d[4 * x + 3] = 255;
+  }
+  const hx = Math.min(PW - 1, Math.max(0, ((head - base) / per) | 0));
+  d[4 * hx] = 235; d[4 * hx + 1] = 228; d[4 * hx + 2] = 215;
+  pctx.putImageData(img, 0, row);
+}
+
+// ---------------------------------------------------------------- pace
+// Slow at first so single steps can be watched, then geometric speed-up
+// to ~26k steps per frame: the whole run takes about forty seconds.
+let spf = 0.08, acc = 0, frameN = 0, paused = false, hurry = false;
+function advance() {
+  if (halted || paused) return;
+  frameN++;
+  spf = hurry ? 2e6 : Math.min(26000, spf * 1.025);
+  acc += spf;
+  let todo = Math.floor(acc); acc -= todo;
+  while (todo > 0 && !halted) {
+    const nextRowAt = Math.ceil((rowsDone + 1) * STEPS / PH);
+    const k = run(Math.min(todo, Math.max(1, nextRowAt - step)));
+    todo -= k;
+    while (rowsDone < PH && (step >= Math.ceil((rowsDone + 1) * STEPS / PH) || halted)) {
+      snapshotRow(rowsDone++);
+      if (halted) break;
+    }
+  }
+}
+
+// ---------------------------------------------------------------- table
+const tableEl = document.getElementById('table');
+tableEl.innerHTML = '<tr><th></th><th>0</th><th>1</th></tr>' + [...NAMES].map((n, s) =>
+  `<tr><th>${n}</th>` + [0, 1].map(r => {
+    const i = s * 2 + r;
+    const op = NX[i] < 0 ? 'halt' : `${WR[i]}${MV[i] > 0 ? 'R' : 'L'}${NAMES[NX[i]]}`;
+    return `<td id="r${i}"><span class="op">${op}</span><span class="ct"></span></td>`;
+  }).join('') + '</tr>').join('');
+const cells = [...Array(10)].map((_, i) => document.getElementById('r' + i));
+function drawTable() {
+  for (let i = 0; i < 10; i++) {
+    cells[i].classList.toggle('hot', i === lastRule && !halted);
+    cells[i].classList.toggle('halt', i === 8 && halted);
+    cells[i].lastChild.textContent = uses[i] ? fmt(uses[i]) : '';
+  }
+}
+
+// ---------------------------------------------------------------- draw
+const fmt = n => Math.round(n).toLocaleString('en-US');
+const capEl = document.getElementById('cap');
+let lastCap = '';
+function draw() {
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.fillStyle = '#0a0a0c'; ctx.fillRect(0, 0, W, H);
+
+  // space-time plot
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(plot, PX, PY);
+  ctx.strokeStyle = 'rgba(200,185,165,0.08)'; ctx.lineWidth = 1;
+  ctx.strokeRect(PX - 0.5, PY - 0.5, PW + 1, PH + 1);
+  // the "now" line
+  if (!halted) {
+    const y = PY + Math.min(PH, step / STEPS * PH);
+    ctx.strokeStyle = 'rgba(201,163,92,0.25)';
+    ctx.beginPath(); ctx.moveTo(PX, y + 0.5); ctx.lineTo(PX + PW, y + 0.5); ctx.stroke();
+  }
+  ctx.fillStyle = 'rgba(200,185,165,0.22)'; ctx.font = '10px Courier New';
+  ctx.fillText('time ↓', PX, PY - 8);
+  ctx.textAlign = 'right'; ctx.fillText('tape ← grows left', PX + PW, PY - 8); ctx.textAlign = 'left';
+
+  // the tape near the head
+  const cs = W < 640 ? 9 : 13, n = Math.floor((W * 0.86) / cs) | 1, half = n >> 1;
+  const ty = PY + PH + 26, tx = W / 2 - half * cs - cs / 2;
+  for (let j = -half; j <= half; j++) {
+    const v = tape[head + j], x = tx + (j + half) * cs;
+    if (v) { ctx.fillStyle = 'rgba(201,163,92,0.75)'; ctx.fillRect(x + 1, ty + 1, cs - 2, cs - 2); }
+    else { ctx.strokeStyle = 'rgba(200,185,165,0.10)'; ctx.strokeRect(x + 1.5, ty + 1.5, cs - 3, cs - 3); }
+  }
+  const hx = tx + half * cs;
+  ctx.strokeStyle = 'rgba(235,228,215,0.9)'; ctx.lineWidth = 1.5;
+  ctx.strokeRect(hx - 0.5, ty - 0.5, cs + 1, cs + 1);
+  ctx.fillStyle = halted ? '#8aaa7a' : '#ebe4d7';
+  ctx.beginPath(); ctx.moveTo(hx + cs / 2, ty + cs + 4); ctx.lineTo(hx + cs / 2 - 5, ty + cs + 11); ctx.lineTo(hx + cs / 2 + 5, ty + cs + 11); ctx.fill();
+  ctx.font = '11px Courier New'; ctx.textAlign = 'center';
+  ctx.fillText(halted ? 'halt' : NAMES[state], hx + cs / 2, ty + cs + 25);
+  ctx.textAlign = 'left';
+
+  drawTable();
+  const c = caption();
+  if (c !== lastCap) { capEl.innerHTML = c; lastCap = c; }
+}
+function caption() {
+  const pos = head - ZERO;
+  if (!halted) {
+    return `step <span class="nu">${fmt(step)}</span> &middot; <span class="nu">${fmt(ones)}</span> ones on the tape &middot; head at <span class="nu">${pos}</span><br>
+      <span class="dim">Five states, two symbols, ten rules. Found by Marxen &amp; Buntrock in 1989.<br>
+      For thirty-five years no one could rule out a five-state machine that runs longer and still stops.</span>`;
+  }
+  return `<span class="ok">halted.</span> step <span class="nu">${fmt(step)}</span> &middot; <span class="nu">${fmt(ones)}</span> ones<br>
+    The bbchallenge collaboration checked all 181,385,789 five-state machines in its enumeration:
+    none stops later than this one. BB(5) = 47,176,870, machine-checked in Coq, 2024.<br>
+    <span class="dim">Six states is another matter. BB(6) is at least 2&uarr;&uarr;&uarr;5, too tall to write down,
+    and one six-state machine, Antihydra, stops only if a Collatz-like question nobody can answer comes out a certain way.</span>`;
+}
+
+// ---------------------------------------------------------------- ui
+function rebuild() { layout(); makePlot(); reset(); }
+const pauseEl = document.getElementById('pause'), hurryEl = document.getElementById('hurry');
+function togglePause() { paused = !paused; pauseEl.textContent = paused ? 'resume' : 'pause'; }
+function toggleHurry() { hurry = !hurry; hurryEl.textContent = hurry ? 'slow down' : 'hurry'; }
+function again() { reset(); paused = false; hurry = false; pauseEl.textContent = 'pause'; hurryEl.textContent = 'hurry'; }
+pauseEl.onclick = togglePause; hurryEl.onclick = toggleHurry;
+document.getElementById('again').onclick = again;
+addEventListener('keydown', e => {
+  if (e.key === ' ') { e.preventDefault(); togglePause(); }
+  else if (e.key === 'h') toggleHurry();
+  else if (e.key === 'r') again();
+});
+// a resize restarts the run: the plot is drawn at screen resolution
+let rt = 0;
+let lastW = innerWidth;
+addEventListener('resize', () => {
+  if (innerWidth === lastW) { layout(); return; }   // mobile toolbars change only the height
+  lastW = innerWidth; clearTimeout(rt); rt = setTimeout(rebuild, 200);
+});
+
+layout(); makePlot(); reset();
+function loop() { advance(); draw(); requestAnimationFrame(loop); }
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
